@@ -52,6 +52,9 @@ const authenticatedRoute = createRoute({
       return
     }
 
+    // TanStack signals a route redirect by throwing its own control-flow object, not
+    // an Error. The lint rule is right in general and wrong about this one API.
+    // eslint-disable-next-line @typescript-eslint/only-throw-error
     throw redirect({
       to: '/sign-in',
       // Where they were going, so they land there rather than on a dashboard after

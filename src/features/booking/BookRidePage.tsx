@@ -78,7 +78,7 @@ export function BookRidePage() {
         <button
           key={option.vehicleClass}
           type="button"
-          onClick={() => setSelected(option)}
+          onClick={() => { setSelected(option); }}
           // A ride the policy forbids is not selectable at all, rather than selectable
           // and then rejected on submit. The reason is shown alongside it, because
           // "not allowed" with no explanation generates a support ticket every time.
@@ -175,7 +175,7 @@ function TextField({
         id={id}
         value={value}
         placeholder={placeholder}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={(event) => { onChange(event.target.value); }}
         className="h-10 w-full rounded-md border border-line bg-surface px-3 text-[15px]"
       />
     </div>
