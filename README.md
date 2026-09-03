@@ -1,6 +1,13 @@
 # orbit-enterprise-web
 
-The corporate travel platform: booking, policy, cost centres, approvals and billing.
+The corporate travel console. React 19, TypeScript, Tailwind 4 and TanStack, with design tokens generated from Figma and every call routed through the gateway.
+
+|  |  |
+|---|---|
+| **Stack** | React 19 · TypeScript · Tailwind 4 · TanStack · Vite · pnpm |
+| **Ports** | `5173` — Dev server |
+| **Tests** | 23, all passing |
+| **Technical reference** | [`docs/TECHNICAL.md`](docs/TECHNICAL.md) · [PDF](docs/orbit-enterprise-web-technical-reference.pdf) |
 
 React 19 · TypeScript · Tailwind 4 · TanStack Query/Router/Table · Vite · pnpm.
 
@@ -107,3 +114,17 @@ docker compose up -d --build
 
 23. The ones worth reading assert that a loading button cannot be clicked twice, that concurrent
 refreshes collapse into one request, and that a 409 is not retried.
+
+---
+
+## Further reading
+
+| | |
+|---|---|
+| [`docs/TECHNICAL.md`](docs/TECHNICAL.md) | The full technical reference: architecture, domain model, design decisions, data model, API, events, flows, failure modes, configuration and testing |
+| [`docs/orbit-enterprise-web-technical-reference.pdf`](docs/orbit-enterprise-web-technical-reference.pdf) | The same document, typeset |
+| [`../README.md`](../README.md) | The platform: every service, how they fit together, and how to bring the whole thing up |
+| [`../architecture.md`](../architecture.md) | The specification this was built from |
+
+This repository is **independent**. It has its own git history, its own build and its own
+deployment lifecycle; nothing above its root is inherited.
