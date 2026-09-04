@@ -13,8 +13,13 @@
     <script>
       try {
         var stored = localStorage.getItem('orbit-theme')
-        var system = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-        document.documentElement.dataset.theme = stored || system
+
+        // Light by default, and it no longer follows the system preference. A travel
+        // manager sees this console, the public site and every Orbit email in the same
+        // afternoon, and a phone set to dark mode should not make one of the three look
+        // like a different company. Anyone who wants dark still has the toggle, and the
+        // choice is remembered.
+        document.documentElement.dataset.theme = stored || 'light'
       } catch (_) {
         /* Private mode, or storage disabled. The light default already applies. */
       }
