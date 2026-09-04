@@ -3,6 +3,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { type SyntheticEvent, useState } from 'react'
 
 import { Button } from '../../components/ui/Button'
+import { cn } from '../../components/ui/cn'
 import { api } from '../../lib/api/client'
 import { ApiError } from '../../lib/api/problem'
 import { setSession } from '../../lib/auth/session'
@@ -13,15 +14,15 @@ interface TokenPair {
   readonly mustChangePassword?: boolean
 }
 
-interface OtpChallenge {
-  readonly challengeId: string
-}
-
 /**
  * Enterprise sign-in.
  *
- * Email and password against identity's own endpoint, with an emailed code as the way
- * back in when a password will not do.
+ * Email and password against identity's own endpoint.
+ *
+ * There was an emailed-code path here and it has been removed: one-time codes belong to
+ * the mobile apps, where a phone number is the account and a code is the only credential
+ * a rider has. A travel manager at a desk has a password manager, and a second credential
+ * on this screen was a second thing to keep working for no benefit either way.
  *
  * This page previously posted to `/v1/auth/sign-in` and `/v1/auth/mfa/verify`. Identity
  * implements neither and never has, so every attempt returned a 404 that the console
@@ -37,8 +38,6 @@ export function SignInPage() {
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [challengeId, setChallengeId] = useState<string | null>(null)
-  const [code, setCode] = useState('')
 
   const signIn = useMutation({
     mutationFn: (): Promise<TokenPair> =>
@@ -49,24 +48,6 @@ export function SignInPage() {
     },
   })
 
-  /** Emails a one-time code, for a traveller who cannot get in with a password. */
-  const requestCode = useMutation({
-    mutationFn: (): Promise<OtpChallenge> =>
-      api.post<OtpChallenge>('/v1/auth/email/otp', { json: { email } }),
-    onSuccess: (challenge) => { setChallengeId(challenge.challengeId) },
-  })
-
-  const verify = useMutation({
-    mutationFn: (): Promise<TokenPair> =>
-      api.post<TokenPair>('/v1/auth/email/otp/verify', { json: { challengeId, code } }),
-    onSuccess: (result) => {
-      setSession(result.accessToken, result.expiresInSeconds)
-      goBackToWhereTheyWere()
-    },
-  })
-
-  const active = challengeId === null ? signIn : verify
-
   /**
    * Returns the user to the page they were trying to reach.
    *
@@ -76,9 +57,6 @@ export function SignInPage() {
    * instead of a 404.
    */
   function goBackToWhereTheyWere() {
-    // Read from the URL rather than from the router's typed search, because the value
-    // is an arbitrary path — the router cannot type it as one of its known routes, and
-    // pretending otherwise turns a bad link into a runtime error instead of a 404.
     const target = new URLSearchParams(window.location.search).get('redirect')
 
     // Same-origin only, and the `//` check matters: `//evil.example` is a
@@ -92,14 +70,7 @@ export function SignInPage() {
 
   function onSubmit(event: SyntheticEvent) {
     event.preventDefault()
-    active.mutate()
-  }
-
-  /** Switches to the emailed-code path without losing the address already typed. */
-  function useCodeInstead() {
-    if (email.length > 0) {
-      requestCode.mutate()
-    }
+    signIn.mutate()
   }
 
   return (
@@ -110,87 +81,113 @@ export function SignInPage() {
       >
         <div className="space-y-1">
           <div className="size-8 rounded-full bg-brand" aria-hidden="true" />
-          <h1 className="text-[24px] font-semibold leading-[30px]">
-            {challengeId === null ? 'Sign in to Orbit for Business' : 'Enter your verification code'}
-          </h1>
+          <h1 className="text-[24px] font-semibold leading-[30px]">Sign in to Orbit for Business</h1>
           <p className="text-[13px] text-fg-secondary">
-            {challengeId === null
-              ? 'Use the work address your administrator invited.'
-              : `We sent a six-digit code to ${email}.`}
+            Use the work address your administrator invited.
           </p>
         </div>
 
-        {challengeId === null ? (
-          <>
-            <Field label="Work email" htmlFor="email">
-              <input
-                id="email"
-                type="email"
-                autoComplete="username"
-                required
-                value={email}
-                onChange={(event) => { setEmail(event.target.value); }}
-                className="h-10 w-full rounded-md border border-line bg-surface px-3 text-[15px]"
-              />
-            </Field>
+        <Field label="Work email" htmlFor="email">
+          <input
+            id="email"
+            type="email"
+            autoComplete="username"
+            required
+            value={email}
+            onChange={(event) => { setEmail(event.target.value); }}
+            className="h-10 w-full rounded-md border border-line bg-surface px-3 text-[15px]"
+          />
+        </Field>
 
-            <Field label="Password" htmlFor="password">
-              <input
-                id="password"
-                type="password"
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(event) => { setPassword(event.target.value); }}
-                className="h-10 w-full rounded-md border border-line bg-surface px-3 text-[15px]"
-              />
-            </Field>
-          </>
-        ) : (
-          <Field label="Verification code" htmlFor="code">
-            <input
-              id="code"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              maxLength={6}
-              required
-              value={code}
-              onChange={(event) => { setCode(event.target.value.replace(/\D/g, '')); }}
-              className="tabular h-12 w-full rounded-md border border-line bg-surface px-3 text-center text-[24px] tracking-[0.4em]"
-            />
-          </Field>
-        )}
+        <Field label="Password" htmlFor="password">
+          <PasswordInput id="password" value={password} onChange={setPassword} />
+        </Field>
 
-        {active.error !== null ? <ErrorNotice error={active.error} /> : null}
+        {signIn.error !== null ? <ErrorNotice error={signIn.error} /> : null}
 
-        <Button type="submit" size="lg" loading={active.isPending} className="w-full">
-          {challengeId === null ? 'Sign in' : 'Verify'}
+        <Button type="submit" size="lg" loading={signIn.isPending} className="w-full">
+          Sign in
         </Button>
 
-        {/* The way back in for a traveller whose password will not work. Without it the
-            console has exactly one credential and no recovery, and the person locked out
-            is a customer's employee who cannot get to a meeting. */}
-        {challengeId === null ? (
-          <button
-            type="button"
-            onClick={useCodeInstead}
-            disabled={email.length === 0 || requestCode.isPending}
-            className="w-full text-center text-[13px] text-fg-brand hover:underline disabled:opacity-50"
-          >
-            {email.length === 0 ? 'Enter your email to get a code instead' : 'Email me a code instead'}
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={() => { setChallengeId(null); setCode('') }}
-            className="w-full text-center text-[13px] text-fg-tertiary hover:text-fg"
-          >
-            Use a password instead
-          </button>
-        )}
-
+        <p className="text-center text-[12px] text-fg-tertiary">
+          Trouble signing in? Your administrator can reset your password.
+        </p>
       </form>
     </div>
+  )
+}
+
+/**
+ * A password input with a reveal toggle.
+ *
+ * A password field is the one place a typo is invisible, and the cost of that typo is a
+ * failed attempt against a lockout counter. Being able to look at what was typed is worth
+ * more than hiding it from a shoulder that is rarely there.
+ */
+function PasswordInput({
+  id,
+  value,
+  onChange,
+}: {
+  readonly id: string
+  readonly value: string
+  readonly onChange: (value: string) => void
+}) {
+  const [revealed, setRevealed] = useState(false)
+
+  return (
+    <div className="relative">
+      <input
+        id={id}
+        type={revealed ? 'text' : 'password'}
+        autoComplete="current-password"
+        required
+        value={value}
+        onChange={(event) => { onChange(event.target.value); }}
+        className="h-10 w-full rounded-md border border-line bg-surface px-3 pr-10 text-[15px]"
+      />
+
+      <button
+        type="button"
+        onClick={() => { setRevealed((current) => !current) }}
+        // The label states what the control will do next, and it changes. That is the
+        // whole message a screen reader needs; aria-pressed on top of it says the same
+        // thing twice and disagrees about which state is "on".
+        aria-label={revealed ? 'Hide password' : 'Show password'}
+        aria-controls={id}
+        // Out of the tab order deliberately: someone typing a password and pressing Tab
+        // expects the submit button, not a control they did not ask for. Still reachable
+        // by click, and by shift-tabbing back.
+        tabIndex={-1}
+        className={cn(
+          'absolute inset-y-0 right-0 grid w-10 place-items-center rounded-r-md',
+          'text-fg-tertiary transition-colors hover:text-fg',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--bg-brand)]/40',
+        )}
+      >
+        <EyeIcon closed={revealed} />
+      </button>
+    </div>
+  )
+}
+
+/** Open eye when the password is hidden; struck through when it is showing. */
+function EyeIcon({ closed }: { readonly closed: boolean }) {
+  return (
+    <svg
+      aria-hidden
+      viewBox="0 0 20 20"
+      className="size-[18px]"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M1.8 10S4.9 4.6 10 4.6 18.2 10 18.2 10 15.1 15.4 10 15.4 1.8 10 1.8 10Z" />
+      <circle cx="10" cy="10" r="2.4" />
+      {closed && <path d="m3 17 14-14" />}
+    </svg>
   )
 }
 
