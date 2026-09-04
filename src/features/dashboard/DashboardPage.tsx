@@ -75,8 +75,12 @@ function StatTile({
     <div className="rounded-lg border border-line-subtle bg-surface p-4 shadow-[var(--shadow-e1)]">
       <p className="text-[11px] font-semibold uppercase tracking-wide text-fg-tertiary">{label}</p>
 
+      {/* The currency figure is the widest thing on this screen and it grows with the
+          company: ₦578,459.00 already overran the tile on a narrow window. It steps down a
+          size below `sm` and is allowed to break rather than being clipped, because a spend
+          total silently missing its last digits is worse than a smaller one. */}
       <p
-        className={`mt-1 text-[28px] font-semibold leading-[34px] ${
+        className={`mt-1 break-words text-[22px] font-semibold leading-[28px] sm:text-[28px] sm:leading-[34px] ${
           tone === 'warning' ? 'text-fg-warning' : 'text-fg'
         }`}
       >

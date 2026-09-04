@@ -1,7 +1,8 @@
-import { Link, Outlet, useRouterState } from '@tanstack/react-router'
+import { Link, Outlet, useNavigate, useRouterState } from '@tanstack/react-router'
 
 import { ThemeToggle } from '../components/ui/ThemeToggle'
 import { cn } from '../components/ui/cn'
+import { clearSession, getAccessToken } from '../lib/auth/session'
 
 const NAV = [
   { to: '/', label: 'Dashboard' },
@@ -23,16 +24,30 @@ const NAV = [
  */
 export function AppShell() {
   const pathname = useRouterState({ select: (state) => state.location.pathname })
+  const navigate = useNavigate()
+  const identity = readSubject()
+
+  function signOut() {
+    clearSession()
+    void navigate({ to: '/' })
+  }
 
   return (
     <div className="flex min-h-screen bg-canvas">
-      <nav aria-label="Main" className="w-60 shrink-0 border-r border-line-subtle bg-surface">
-        <div className="flex h-14 items-center gap-2 px-4">
-          <div className="size-6 rounded-full bg-brand" aria-hidden="true" />
-          <span className="text-[15px] font-semibold">Orbit for Business</span>
+      <nav
+        aria-label="Main"
+        className="flex w-60 shrink-0 flex-col border-r border-line-subtle bg-surface"
+      >
+        {/* The same mark as the sign-in page, the operations console and the public site.
+            A different logo per surface reads as a different product. */}
+        <div className="flex h-14 shrink-0 items-center gap-2.5 px-4">
+          <span className="grid size-7 place-items-center rounded-md bg-brand text-[13px] font-semibold text-fg-on-brand">
+            O
+          </span>
+          <span className="text-[15px] font-semibold tracking-[-0.01em]">Orbit for Business</span>
         </div>
 
-        <ul className="space-y-0.5 px-2 py-2">
+        <ul className="flex-1 space-y-0.5 px-2 py-2">
           {NAV.map((item) => (
             <li key={item.to}>
               <Link
@@ -53,6 +68,25 @@ export function AppShell() {
             </li>
           ))}
         </ul>
+
+        {/* Who is signed in, and the way out. Neither existed: a console that bills a
+            company for its employees' travel never showed whose account was doing it, and
+            there was no sign-out anywhere in the application. */}
+        <div className="shrink-0 border-t border-line-subtle p-3">
+          {identity !== null && (
+            <p className="mb-2 truncate px-1 text-[11px] text-fg-tertiary" title={identity}>
+              {identity}
+            </p>
+          )}
+
+          <button
+            type="button"
+            onClick={signOut}
+            className="w-full rounded-md px-1 py-1.5 text-left text-[12px] font-medium text-fg-secondary transition-colors hover:bg-hover hover:text-fg"
+          >
+            Sign out
+          </button>
+        </div>
       </nav>
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -69,4 +103,37 @@ export function AppShell() {
       </div>
     </div>
   )
+}
+
+/**
+ * The subject the access token carries.
+ *
+ * Read from the token rather than held in state, so it cannot disagree with the credential
+ * actually being sent. The token has no email on it, so this is an account id — enough to
+ * tell two sessions apart, which is what it is for.
+ */
+function readSubject(): string | null {
+  const token = getAccessToken()
+
+  if (token === null) {
+    return null
+  }
+
+  try {
+    const payload = token.split('.')[1]
+
+    if (payload === undefined) {
+      return null
+    }
+
+    const padded = payload.padEnd(payload.length + ((4 - (payload.length % 4)) % 4), '=')
+    const claims = JSON.parse(atob(padded.replaceAll('-', '+').replaceAll('_', '/'))) as Record<string, unknown>
+    const subject = claims['sub']
+
+    return typeof subject === 'string' ? subject : null
+  } catch {
+    // A malformed token is not worth breaking the shell over: the next API call rejects it
+    // and lands the user on sign-in with a real message.
+    return null
+  }
 }

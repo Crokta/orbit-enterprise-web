@@ -4,20 +4,41 @@ import { api } from '../../lib/api/client'
 import { queryKeys } from '../../lib/query/client'
 import { DataList, type Column } from '../shared/DataList'
 
+// Field names match what the enterprise BFF actually returns. They did not: this asked for
+// `maxFareMinor`, `requiresApprovalAbove` and `appliesTo`, none of which the service has ever
+// sent, so both money columns rendered ₦NaN and the employee count read "undefined" — on the
+// screen a travel manager uses to decide what their staff are allowed to spend.
 interface Policy {
   readonly policyId: string
   readonly name: string
-  readonly appliesTo: string
-  readonly maxFareMinor: number | null
+  readonly hardCapMinor: number | null
+  readonly approvalThresholdMinor: number | null
   readonly currency: string
   readonly allowedClasses: readonly string[]
-  readonly requiresApprovalAbove: number | null
+  readonly requiresCostCentre: boolean
+  readonly requiresApprovalForSurge: boolean
+  readonly isActive: boolean
   readonly activeEmployees: number
 }
 
 const COLUMNS: readonly Column<Policy>[] = [
   { key: 'name', header: 'Policy', render: (row) => row.name },
-  { key: 'appliesTo', header: 'Applies to', render: (row) => row.appliesTo, muted: true },
+  {
+    key: 'rules',
+    header: 'Requires',
+    // Replaces an "Applies to" column that had no field behind it. A policy applies to
+    // whoever is assigned it, which the Employees column already says; these two flags are
+    // real rules and were not shown anywhere.
+    render: (row) => {
+      const rules = [
+        row.requiresCostCentre ? 'Cost centre' : null,
+        row.requiresApprovalForSurge ? 'Approval on surge' : null,
+      ].filter((rule): rule is string => rule !== null)
+
+      return rules.length === 0 ? 'Nothing' : rules.join(' · ')
+    },
+    muted: true,
+  },
   {
     key: 'classes',
     header: 'Vehicle classes',
@@ -30,12 +51,13 @@ const COLUMNS: readonly Column<Policy>[] = [
   {
     key: 'cap',
     header: 'Fare cap',
-    money: (row) => (row.maxFareMinor === null ? null : [row.maxFareMinor, row.currency]),
+    money: (row) => (row.hardCapMinor === null ? null : [row.hardCapMinor, row.currency]),
   },
   {
     key: 'approval',
     header: 'Approval above',
-    money: (row) => (row.requiresApprovalAbove === null ? null : [row.requiresApprovalAbove, row.currency]),
+    money: (row) =>
+      row.approvalThresholdMinor === null ? null : [row.approvalThresholdMinor, row.currency],
   },
   { key: 'employees', header: 'Employees', render: (row) => String(row.activeEmployees) },
 ]

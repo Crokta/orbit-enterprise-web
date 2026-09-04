@@ -11,6 +11,14 @@ export type Status =
   | 'approved'
   | 'rejected'
 
+  // The employee lifecycle. These were missing, so the employees table rendered a pill
+  // with no style and no label — a blank cell where the account's state should be. It
+  // type-checked because the page declared a union that did not describe what the service
+  // actually sends.
+  | 'active'
+  | 'invited'
+  | 'suspended'
+
 const STYLES: Record<Status, string> = {
   // Straight off the Figma status ramp. Colour is never the only signal — each pill
   // also carries its label — because roughly one in twelve men cannot reliably tell
@@ -23,6 +31,9 @@ const STYLES: Record<Status, string> = {
   pending: 'bg-warning-subtle text-fg-warning',
   approved: 'bg-success-subtle text-fg-success',
   rejected: 'bg-danger-subtle text-fg-danger',
+  active: 'bg-success-subtle text-fg-success',
+  invited: 'bg-warning-subtle text-fg-warning',
+  suspended: 'bg-danger-subtle text-fg-danger',
 }
 
 const LABELS: Record<Status, string> = {
@@ -34,6 +45,9 @@ const LABELS: Record<Status, string> = {
   pending: 'Pending',
   approved: 'Approved',
   rejected: 'Rejected',
+  active: 'Active',
+  invited: 'Invited',
+  suspended: 'Suspended',
 }
 
 export function StatusPill({ status, className }: { readonly status: Status; readonly className?: string }) {

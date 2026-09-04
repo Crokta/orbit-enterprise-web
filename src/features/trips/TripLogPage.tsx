@@ -14,13 +14,12 @@ import { queryKeys } from '../../lib/query/client'
 
 interface TripRow {
   readonly rideId: string
-  readonly employeeName: string
+  readonly employeeId: string
   readonly costCentre: string
   readonly pickupLabel: string
   readonly dropoffLabel: string
   readonly fareMinor: number
   readonly currency: string
-  readonly state: string
   readonly completedAt: string | null
   readonly policyBreach: string | null
 }
@@ -57,7 +56,7 @@ export function TripLogPage() {
         header: 'Ride',
         cell: (info) => <span className="tabular text-[13px]">{info.getValue<string>()}</span>,
       },
-      { accessorKey: 'employeeName', header: 'Employee' },
+      { accessorKey: 'employeeId', header: 'Employee' },
       { accessorKey: 'costCentre', header: 'Cost centre' },
       {
         id: 'route',
