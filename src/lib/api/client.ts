@@ -9,7 +9,7 @@ import { getAccessToken, refreshAccessToken } from '../auth/session'
  * header sanitisation happen, and a client that can reach a service directly is a
  * client that can skip all three (§5.1).
  */
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
+export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
 
 interface RequestOptions extends Omit<RequestInit, 'body'> {
   /** Serialised as JSON. Pass `FormData` through `raw` instead. */

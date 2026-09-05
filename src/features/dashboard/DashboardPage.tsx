@@ -28,15 +28,15 @@ export function DashboardPage() {
 
   const recent = useQuery({
     queryKey: queryKeys.rides.list({ recent: true }),
-    queryFn: () => enterprise.trips.page(undefined, 5),
+    queryFn: () => enterprise.trips.page({ limit: 25 }),
     enabled: travel,
   })
 
-  const centres = useQuery({ queryKey: queryKeys.costCentres.all, queryFn: enterprise.costCentres.list })
+  const centres = useQuery({ queryKey: queryKeys.costCentres.all, queryFn: () => enterprise.costCentres.list({ limit: 200 }) })
 
   const invoices = useQuery({
     queryKey: queryKeys.invoices.list({}),
-    queryFn: enterprise.invoices.list,
+    queryFn: () => enterprise.invoices.list({ limit: 200 }),
     enabled: billing,
   })
 
@@ -59,7 +59,7 @@ export function DashboardPage() {
         ['Policy breaches', data.policyBreaches, data.previous.policyBreaches],
         ['Active employees', data.activeEmployees, ''],
         ['Pending approvals', data.pendingApprovals, ''],
-        ...(centres.data ?? []).map((centre) => [
+        ...(centres.data?.items ?? []).map((centre) => [
           `Spend · ${centre.name} (${centre.code})`,
           formatMoney(centre.spendMinor, centre.currency, { fraction: true }),
           '',
@@ -68,7 +68,7 @@ export function DashboardPage() {
     )
   }
 
-  const overdue = invoices.data?.find((invoice) => invoice.status === 'Overdue')
+  const overdue = invoices.data?.items.find((invoice) => invoice.status === 'Overdue')
 
   return (
     <div className="space-y-6">
@@ -161,7 +161,7 @@ export function DashboardPage() {
                 render: (row) => <Money minorUnits={row.fareMinor} currency={row.currency} />,
               },
             ]}
-            rows={recent.data?.items}
+            rows={recent.data?.items.slice(0, 5)}
             rowKey={(row) => row.rideId}
             isPending={recent.isPending}
             emptyTitle="No rides yet this month"
@@ -180,7 +180,7 @@ export function DashboardPage() {
             data === undefined ? monthToDateLabel(now) : `${monthToDateLabel(now)} · ${formatMoney(data.spendMinor, data.currency, { compact: true })} total`
           }
         >
-          <SpendBars centres={centres.data ?? []} total={data?.spendMinor ?? 0} loading={centres.isPending} />
+          <SpendBars centres={centres.data?.items ?? []} total={data?.spendMinor ?? 0} loading={centres.isPending} />
         </Card>
 
         <Card title="Needs attention" subtitle="Items an admin should act on today">

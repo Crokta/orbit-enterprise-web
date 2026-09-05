@@ -19,12 +19,12 @@ export function NotificationBell() {
 
   const queue = useQuery({
     queryKey: queryKeys.approvals.queue(),
-    queryFn: enterprise.approvals.queue,
+    queryFn: () => enterprise.approvals.queue({ limit: 200 }),
     enabled: approver,
     refetchInterval: 60_000,
   })
 
-  const pending = queue.data?.length ?? 0
+  const pending = queue.data?.items.length ?? 0
 
   return (
     <Link

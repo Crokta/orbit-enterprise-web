@@ -3,15 +3,16 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { Badge } from '../../components/ui/Badge'
 import { Button } from '../../components/ui/Button'
-import { PrefixedInput, TextInput, Toggle } from '../../components/ui/Inputs'
+import { PrefixedInput, SearchInput, TextInput, Toggle } from '../../components/ui/Inputs'
+import { ExportButton, FilterSelect, ListToolbar, Pagination } from '../../components/ui/ListControls'
 import { LoadError } from '../../components/ui/LoadError'
 import { PageHeader } from '../../components/ui/PageHeader'
 import { useToast } from '../../components/ui/Toast'
 import { cn } from '../../components/ui/cn'
 import { enterprise, type Policy, type PolicyRules, vehicleLabel } from '../../lib/api/enterprise'
 import { ApiError } from '../../lib/api/problem'
-import { downloadCsv } from '../../lib/csv'
-import { formatCount, formatMoney } from '../../lib/format'
+import { formatCount } from '../../lib/format'
+import { useDebounced, usePagedList } from '../../lib/paging'
 import { queryKeys } from '../../lib/query/client'
 import { NewPolicyDialog } from './NewPolicyDialog'
 
@@ -28,15 +29,34 @@ export function PoliciesPage() {
   const queryClient = useQueryClient()
   const toast = useToast()
 
-  const policies = useQuery({ queryKey: queryKeys.policies.all, queryFn: enterprise.policies.list })
-  const employees = useQuery({ queryKey: queryKeys.employees.list({}), queryFn: enterprise.employees.list })
+  const [query, setQuery] = useState('')
+  const [active, setActive] = useState<'all' | 'active' | 'retired'>('all')
+  const q = useDebounced(query.trim())
+  const params = useMemo(
+    () => ({ q: q.length === 0 ? undefined : q, active: active === 'all' ? undefined : active === 'active' }),
+    [q, active],
+  )
+
+  const policies = usePagedList<Policy, typeof params>({
+    key: queryKeys.policies.all,
+    filters: params,
+    fetchPage: (page) => enterprise.policies.list(page),
+    initialLimit: 25,
+  })
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
 
+  // The new-policy dialog assigns people; bounded by the company, fetched when opened.
+  const employees = useQuery({
+    queryKey: queryKeys.employees.list({ forDialog: 'policies' }),
+    queryFn: () => enterprise.employees.list({ status: 'Active', limit: 200 }),
+    enabled: creating,
+  })
+
   const sorted = useMemo(
-    () => [...(policies.data ?? [])].sort((a, b) => Number(b.isActive) - Number(a.isActive) || b.activeEmployees - a.activeEmployees),
-    [policies.data],
+    () => [...policies.items].sort((a, b) => Number(b.isActive) - Number(a.isActive) || b.activeEmployees - a.activeEmployees),
+    [policies.items],
   )
 
   const selected = sorted.find((policy) => policy.policyId === selectedId) ?? sorted[0]
@@ -47,53 +67,50 @@ export function PoliciesPage() {
     }
   }, [selected, selectedId])
 
-  const total = employees.data?.filter((employee) => employee.status === 'Active').length ?? 0
-
-  function exportPolicies() {
-    downloadCsv(
-      `orbit-policies-${new Date().toISOString().slice(0, 10)}.csv`,
-      ['Policy', 'Active', 'Employees', 'Approval above', 'Hard cap', 'Currency', 'Ride tiers', 'Allowed from', 'Allowed to', 'Cost centre required', 'Surge needs approval'],
-      sorted.map((policy) => [
-        policy.name,
-        policy.isActive ? 'Yes' : 'No',
-        policy.activeEmployees,
-        policy.approvalThresholdMinor === null ? '' : formatMoney(policy.approvalThresholdMinor, policy.currency, { fraction: true }),
-        policy.hardCapMinor === null ? '' : formatMoney(policy.hardCapMinor, policy.currency, { fraction: true }),
-        policy.currency,
-        policy.allowedClasses.length === 0 ? 'All' : policy.allowedClasses.map(vehicleLabel).join('; '),
-        policy.permittedFrom,
-        policy.permittedTo,
-        policy.requiresCostCentre ? 'Yes' : 'No',
-        policy.requiresApprovalForSurge ? 'Yes' : 'No',
-      ]),
-    )
-  }
+  const covered = sorted.reduce((sum, policy) => sum + policy.activeEmployees, 0)
 
   return (
     <div className="space-y-5">
       <PageHeader
         title="Ride policies"
-        subtitle={policies.data === undefined ? undefined : `${formatCount(policies.data.length)} policies · applied to ${formatCount(total)} employees`}
+        subtitle={policies.query.data === undefined ? undefined : `${formatCount(sorted.length)}${policies.hasNext ? '+' : ''} policies · applied to ${formatCount(covered)} employees`}
         actions={
           <>
-            <Button variant="secondary" onClick={exportPolicies} disabled={sorted.length === 0}>Export</Button>
+            <ExportButton path={enterprise.policies.exportPath} query={params} filename="orbit-policies.csv" />
             <Button onClick={() => { setCreating(true); }}>New policy</Button>
           </>
         }
       />
 
-      {policies.isError ? (
-        <LoadError error={policies.error} what="the policies" onRetry={() => { void policies.refetch() }} />
-      ) : policies.isPending ? (
+      <ListToolbar>
+        <SearchInput value={query} onChange={setQuery} placeholder="Search policies" className="w-[280px]" />
+        <FilterSelect
+          label="Status"
+          value={active}
+          onChange={setActive}
+          options={[
+            { value: 'all', label: 'Active and retired' },
+            { value: 'active', label: 'Active' },
+            { value: 'retired', label: 'Retired' },
+          ]}
+        />
+      </ListToolbar>
+
+      {policies.query.isError ? (
+        <LoadError error={policies.query.error} what="the policies" onRetry={() => { void policies.query.refetch() }} />
+      ) : policies.query.isPending ? (
         <p className="text-[13px] text-fg-tertiary">Loading policies…</p>
       ) : sorted.length === 0 ? (
         <div className="rounded-xl border border-line-subtle bg-surface p-12 text-center">
-          <p className="text-[15px] font-medium">No policies yet</p>
-          <p className="mt-1 text-[13px] text-fg-tertiary">Without one, every trip is allowed and nothing needs approval.</p>
-          <Button className="mt-4" onClick={() => { setCreating(true); }}>Create the first policy</Button>
+          <p className="text-[15px] font-medium">{q.length > 0 || active !== 'all' ? 'No policies match' : 'No policies yet'}</p>
+          <p className="mt-1 text-[13px] text-fg-tertiary">
+            {q.length > 0 || active !== 'all' ? 'Try another search or filter.' : 'Without one, every trip is allowed and nothing needs approval.'}
+          </p>
+          {q.length === 0 && active === 'all' && <Button className="mt-4" onClick={() => { setCreating(true); }}>Create the first policy</Button>}
         </div>
       ) : (
         <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+          <div className="space-y-2">
           <ul className="space-y-2" aria-label="Policies">
             {sorted.map((policy) => {
               const active = policy.policyId === selected?.policyId
@@ -119,6 +136,8 @@ export function PoliciesPage() {
               )
             })}
           </ul>
+          <Pagination list={policies} />
+          </div>
 
           {selected !== undefined && (
             <PolicyEditor
@@ -138,7 +157,7 @@ export function PoliciesPage() {
         open={creating}
         onClose={() => { setCreating(false); }}
         existing={sorted}
-        employees={employees.data ?? []}
+        employees={employees.data?.items ?? []}
         onCreated={(policy) => {
           setCreating(false)
           setSelectedId(policy.policyId)

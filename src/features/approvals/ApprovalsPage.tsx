@@ -1,6 +1,6 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 
 import { Avatar } from '../../components/ui/Avatar'
 import { Badge } from '../../components/ui/Badge'
@@ -8,7 +8,8 @@ import { Banner } from '../../components/ui/Banner'
 import { Button } from '../../components/ui/Button'
 import { Dialog } from '../../components/ui/Dialog'
 import { Icon } from '../../components/ui/Icon'
-import { Field } from '../../components/ui/Inputs'
+import { Field, SearchInput } from '../../components/ui/Inputs'
+import { ExportButton, FilterSelect, ListToolbar, Pagination } from '../../components/ui/ListControls'
 import { LoadError } from '../../components/ui/LoadError'
 import { Money } from '../../components/ui/Money'
 import { PageHeader } from '../../components/ui/PageHeader'
@@ -16,8 +17,8 @@ import { useToast } from '../../components/ui/Toast'
 import { cn } from '../../components/ui/cn'
 import { canManageTravel, enterprise, type Approval } from '../../lib/api/enterprise'
 import { ApiError } from '../../lib/api/problem'
-import { downloadCsv } from '../../lib/csv'
 import { formatCount, formatMoney, formatUntil, formatWaiting, formatWhen } from '../../lib/format'
+import { useDebounced, usePagedList } from '../../lib/paging'
 import { queryKeys } from '../../lib/query/client'
 import { useMe } from '../session/useMe'
 
@@ -29,9 +30,16 @@ export function ApprovalsPage() {
   const toast = useToast()
   const [declining, setDeclining] = useState<Approval | null>(null)
 
-  const queue = useQuery({
-    queryKey: queryKeys.approvals.queue(),
-    queryFn: enterprise.approvals.queue,
+  const [query, setQuery] = useState('')
+  const [status, setStatus] = useState<'pending' | 'decided' | 'all'>('pending')
+  const q = useDebounced(query.trim())
+  const params = useMemo(() => ({ q: q.length === 0 ? undefined : q, status }), [q, status])
+
+  const queue = usePagedList<Approval, typeof params>({
+    key: queryKeys.approvals.all,
+    filters: params,
+    fetchPage: (page) => enterprise.approvals.queue(page),
+    initialLimit: 25,
 
     // An employee is standing on a pavement waiting for this decision, so the queue
     // refreshes on its own rather than waiting for the manager to reload.
@@ -63,36 +71,27 @@ export function ApprovalsPage() {
     },
   })
 
-  const rows = queue.data ?? []
+  const rows = queue.items
   const oldest = rows[0]
   const policyCap = me.data?.policy?.approvalThresholdMinor ?? null
   const currency = me.data?.currency ?? 'NGN'
-
-  function exportQueue() {
-    downloadCsv(
-      `orbit-approvals-${new Date().toISOString().slice(0, 10)}.csv`,
-      ['Request', 'Employee', 'Email', 'Cost centre', 'Pick-up', 'Destination', 'Fare', 'Currency', 'Reason', 'Requested', 'Expires'],
-      rows.map((row) => [
-        row.approvalId, row.employeeName, row.employeeEmail, row.costCentreCode, row.pickupLabel, row.dropoffLabel,
-        formatMoney(row.estimatedFareMinor, row.currency, { fraction: true }), row.currency, row.policyReason, row.requestedAt, row.expiresAt,
-      ]),
-    )
-  }
 
   return (
     <div className="space-y-5">
       <PageHeader
         title="Approvals"
         subtitle={
-          queue.data === undefined
+          queue.query.data === undefined
             ? undefined
-            : rows.length === 0
-              ? 'Nothing pending'
-              : `${formatCount(rows.length)} pending · oldest waiting ${oldest === undefined ? '' : formatWaiting(oldest.requestedAt)}`
+            : status !== 'pending'
+              ? `${formatCount(rows.length)}${queue.hasNext ? '+' : ''} requests`
+              : rows.length === 0
+                ? 'Nothing pending'
+                : `${formatCount(rows.length)}${queue.hasNext ? '+' : ''} pending · oldest waiting ${oldest === undefined ? '' : formatWaiting(oldest.requestedAt)}`
         }
         actions={
           <>
-            <Button variant="secondary" onClick={exportQueue} disabled={rows.length === 0}>Export</Button>
+            <ExportButton path={enterprise.approvals.exportPath} query={params} filename="orbit-approvals.csv" />
             {me.data !== undefined && canManageTravel(me.data.role) && (
               <Button onClick={() => { void navigate({ to: '/policies' }) }}>Approval settings</Button>
             )}
@@ -106,15 +105,31 @@ export function ApprovalsPage() {
         {' '}Requests expire after 15 minutes if nobody answers.
       </Banner>
 
-      {queue.isError ? (
-        <LoadError error={queue.error} what="the approval queue" onRetry={() => { void queue.refetch() }} />
-      ) : queue.isPending ? (
+      <ListToolbar>
+        <SearchInput value={query} onChange={setQuery} placeholder="Search employee, route or reason" className="w-[300px]" />
+        <FilterSelect
+          label="Status"
+          value={status}
+          onChange={setStatus}
+          options={[
+            { value: 'pending', label: 'Pending' },
+            { value: 'decided', label: 'Decided' },
+            { value: 'all', label: 'All requests' },
+          ]}
+        />
+      </ListToolbar>
+
+      {queue.query.isError ? (
+        <LoadError error={queue.query.error} what="the approval queue" onRetry={() => { void queue.query.refetch() }} />
+      ) : queue.query.isPending ? (
         <p className="text-[13px] text-fg-tertiary">Loading approvals…</p>
       ) : rows.length === 0 ? (
         <div className="rounded-xl border border-line-subtle bg-surface p-12 text-center">
           <Icon name="check-circle" size={28} className="mx-auto text-fg-success" />
-          <p className="mt-3 text-[15px] font-medium">Nothing is waiting on you</p>
-          <p className="mt-1 text-[13px] text-fg-tertiary">New requests appear here the moment an employee books outside policy.</p>
+          <p className="mt-3 text-[15px] font-medium">{q.length > 0 || status !== 'pending' ? 'No requests match' : 'Nothing is waiting on you'}</p>
+          <p className="mt-1 text-[13px] text-fg-tertiary">
+            {q.length > 0 || status !== 'pending' ? 'Try another search or status.' : 'New requests appear here the moment an employee books outside policy.'}
+          </p>
         </div>
       ) : (
         rows.map((row) => {
@@ -174,19 +189,24 @@ export function ApprovalsPage() {
               <div className="mt-4 flex items-center gap-3">
                 {mine && <Badge tone="danger">Your own request</Badge>}
                 {severe && <Badge tone="danger">Over ₦50,000</Badge>}
-                <div className="ml-auto flex gap-2">
-                  <Button variant="secondary" disabled={mine || busy} onClick={() => { setDeclining(row); }}>
-                    Decline
-                  </Button>
-                  <Button loading={busy} disabled={mine} onClick={() => { decide.mutate({ approval: row, approve: true, note: null }) }}>
-                    Approve
-                  </Button>
-                </div>
+                {row.status !== 'Pending' && <Badge tone={row.status === 'Approved' ? 'success' : 'neutral'}>{row.status}{row.decidedBy === null ? '' : ` by ${row.decidedBy}`}</Badge>}
+                {row.status === 'Pending' && (
+                  <div className="ml-auto flex gap-2">
+                    <Button variant="secondary" disabled={mine || busy} onClick={() => { setDeclining(row); }}>
+                      Decline
+                    </Button>
+                    <Button loading={busy} disabled={mine} onClick={() => { decide.mutate({ approval: row, approve: true, note: null }) }}>
+                      Approve
+                    </Button>
+                  </div>
+                )}
               </div>
             </article>
           )
         })
       )}
+
+      {!queue.query.isPending && !queue.query.isError && <Pagination list={queue} />}
 
       <DeclineDialog
         approval={declining}

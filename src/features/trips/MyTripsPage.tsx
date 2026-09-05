@@ -1,22 +1,23 @@
-import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useMemo, useState } from 'react'
 
 import { Button } from '../../components/ui/Button'
 import { ChipGroup } from '../../components/ui/Chip'
+import { SearchInput } from '../../components/ui/Inputs'
+import { ExportButton, ListToolbar, Pagination } from '../../components/ui/ListControls'
 import { LoadError } from '../../components/ui/LoadError'
 import { Money } from '../../components/ui/Money'
 import { PageHeader } from '../../components/ui/PageHeader'
 import { StatusPill, type Status } from '../../components/ui/StatusPill'
 import { Table, TwoLine } from '../../components/ui/Table'
 import { useToast } from '../../components/ui/Toast'
-import { enterprise, type MyTrip } from '../../lib/api/enterprise'
-import { downloadCsv } from '../../lib/csv'
+import { enterprise, type MyTrip, type MyTripListParams } from '../../lib/api/enterprise'
 import { formatCount, formatMoney, formatWhen } from '../../lib/format'
+import { useDebounced, usePagedList } from '../../lib/paging'
 import { queryKeys } from '../../lib/query/client'
 import { useMe } from '../session/useMe'
 
-type Filter = 'all' | 'upcoming' | 'awaiting' | 'completed' | 'declined'
+type Filter = 'all' | 'awaiting' | 'approved' | 'completed' | 'declined'
 
 /** The employee's own trips: completed rides and every request they have made. */
 export function MyTripsPage() {
@@ -24,38 +25,26 @@ export function MyTripsPage() {
   const navigate = useNavigate()
   const toast = useToast()
   const [filter, setFilter] = useState<Filter>('all')
+  const [query, setQuery] = useState('')
 
-  const trips = useQuery({ queryKey: queryKeys.myTrips, queryFn: enterprise.my.trips, refetchInterval: 30_000 })
+  const q = useDebounced(query.trim())
 
-  const rows = useMemo(() => {
-    const items = trips.data ?? []
+  const params = useMemo<MyTripListParams>(
+    () => ({
+      q: q.length === 0 ? undefined : q,
+      status: filter === 'all' ? undefined : filter === 'awaiting' ? 'Pending' : filter === 'approved' ? 'Approved' : filter === 'completed' ? 'Completed' : 'Declined',
+    }),
+    [q, filter],
+  )
 
-    switch (filter) {
-      case 'upcoming':
-        return items.filter((trip) => trip.status === 'Pending' || trip.status === 'Approved')
-      case 'awaiting':
-        return items.filter((trip) => trip.status === 'Pending')
-      case 'completed':
-        return items.filter((trip) => trip.status === 'Completed')
-      case 'declined':
-        return items.filter((trip) => trip.status === 'Declined' || trip.status === 'Expired' || trip.status === 'Withdrawn')
-      default:
-        return items
-    }
-  }, [trips.data, filter])
+  const trips = usePagedList<MyTrip, MyTripListParams>({
+    key: queryKeys.myTrips,
+    filters: params,
+    fetchPage: (page) => enterprise.my.trips(page),
+    refetchInterval: 30_000,
+  })
 
-  const awaiting = (trips.data ?? []).filter((trip) => trip.status === 'Pending').length
-
-  function exportTrips() {
-    downloadCsv(
-      `orbit-my-trips-${new Date().toISOString().slice(0, 10)}.csv`,
-      ['Reference', 'Kind', 'When', 'Pick-up', 'Destination', 'Cost centre', 'Status', 'Fare', 'Currency', 'Policy'],
-      rows.map((trip) => [
-        trip.id, trip.kind, trip.at, trip.pickupLabel, trip.dropoffLabel, trip.costCentreCode, trip.status,
-        formatMoney(trip.fareMinor, trip.currency, { fraction: true }), trip.currency, trip.policyReason,
-      ]),
-    )
-  }
+  const rows = trips.items
 
   return (
     <div className="space-y-5">
@@ -64,73 +53,80 @@ export function MyTripsPage() {
         subtitle={
           me.data === undefined
             ? undefined
-            : `${formatCount(me.data.tripsThisMonth)} rides this month · ${formatMoney(me.data.spendThisMonthMinor, me.data.currency)} · ${formatCount(awaiting)} awaiting approval`
+            : `${formatCount(me.data.tripsThisMonth)} rides this month · ${formatMoney(me.data.spendThisMonthMinor, me.data.currency)}`
+        }
+        actions={
+          <>
+            <ExportButton path={enterprise.my.tripsExportPath} query={{ ...params }} filename="orbit-my-trips.csv" />
+            <Button onClick={() => { void navigate({ to: '/book' }) }}>Book a ride</Button>
+          </>
         }
       />
 
-      <div className="flex flex-wrap items-center justify-between gap-4">
+      <ListToolbar>
+        <SearchInput value={query} onChange={setQuery} placeholder="Search route, reference or cost centre" className="w-[300px]" />
         <ChipGroup<Filter>
           label="Filter trips"
           value={filter}
           onChange={setFilter}
           options={[
             { value: 'all', label: 'All' },
-            { value: 'upcoming', label: 'Upcoming' },
-            { value: 'awaiting', label: 'Awaiting approval', count: awaiting },
+            { value: 'awaiting', label: 'Awaiting approval' },
+            { value: 'approved', label: 'Approved' },
             { value: 'completed', label: 'Completed' },
             { value: 'declined', label: 'Declined' },
           ]}
         />
-        <div className="flex gap-2">
-          <Button variant="secondary" onClick={exportTrips} disabled={rows.length === 0}>Export</Button>
-          <Button onClick={() => { void navigate({ to: '/book' }) }}>Book a ride</Button>
-        </div>
-      </div>
+      </ListToolbar>
 
-      {trips.isError ? (
-        <LoadError error={trips.error} what="your trips" onRetry={() => { void trips.refetch() }} />
+      {trips.query.isError ? (
+        <LoadError error={trips.query.error} what="your trips" onRetry={() => { void trips.query.refetch() }} />
       ) : (
-        <Table<MyTrip>
-          columns={[
-            {
-              key: 'trip',
-              header: 'Trip',
-              render: (row) => (
-                <TwoLine
-                  primary={<>{row.pickupLabel} <span className="text-fg-tertiary">→</span> {row.dropoffLabel}</>}
-                  secondary={row.id}
-                  mono
-                />
-              ),
-            },
-            { key: 'when', header: 'When', render: (row) => formatWhen(row.at) },
-            { key: 'cc', header: 'Cost centre', render: (row) => row.costCentreCode ?? <span className="text-fg-tertiary">—</span> },
-            { key: 'fare', header: 'Fare', align: 'right', sorted: true, render: (row) => <Money minorUnits={row.fareMinor} currency={row.currency} /> },
-            {
-              key: 'status',
-              header: 'Status',
-              render: (row) => <StatusPill status={toStatus(row)} label={row.status === 'Declined' && row.decisionNote !== null ? `Declined — ${row.decisionNote}` : undefined} />,
-            },
-          ]}
-          rows={rows}
-          rowKey={(row) => row.id}
-          isPending={trips.isPending}
-          emptyTitle={filter === 'all' ? 'No trips yet' : 'Nothing here'}
-          emptyHint={filter === 'all' ? 'Your completed rides and approval requests will appear here.' : 'Try another filter.'}
-          rowClassName={(row) => (row.status === 'Pending' ? 'bg-warning-subtle/40' : undefined)}
-          onRowClick={(row) => {
-            if (row.kind === 'Request') {
-              void navigate({ to: '/my-trips/$approvalId', params: { approvalId: row.id } })
-            }
-          }}
-          rowActions={(row) => [
-            ...(row.kind === 'Request'
-              ? [{ label: 'View request', onSelect: () => { void navigate({ to: '/my-trips/$approvalId', params: { approvalId: row.id } }) } }]
-              : []),
-            { label: 'Copy reference', onSelect: () => { void navigator.clipboard.writeText(row.id).then(() => { toast.notify('Reference copied') }) } },
-            { label: 'Book again', onSelect: () => { void navigate({ to: '/book' }) } },
-          ]}
-        />
+        <>
+          <Table<MyTrip>
+            columns={[
+              {
+                key: 'trip',
+                header: 'Trip',
+                render: (row) => (
+                  <TwoLine
+                    primary={<>{row.pickupLabel} <span className="text-fg-tertiary">→</span> {row.dropoffLabel}</>}
+                    secondary={row.id}
+                    mono
+                  />
+                ),
+              },
+              { key: 'when', header: 'When', render: (row) => formatWhen(row.at) },
+              { key: 'cc', header: 'Cost centre', render: (row) => row.costCentreCode ?? <span className="text-fg-tertiary">—</span> },
+              { key: 'fare', header: 'Fare', align: 'right', sorted: true, render: (row) => <Money minorUnits={row.fareMinor} currency={row.currency} /> },
+              {
+                key: 'status',
+                header: 'Status',
+                render: (row) => <StatusPill status={toStatus(row)} label={row.status === 'Declined' && row.decisionNote !== null ? `Declined — ${row.decisionNote}` : undefined} />,
+              },
+            ]}
+            rows={rows}
+            rowKey={(row) => row.id}
+            isPending={trips.query.isPending}
+            emptyTitle={filter === 'all' && q.length === 0 ? 'No trips yet' : 'Nothing here'}
+            emptyHint={filter === 'all' && q.length === 0 ? 'Your completed rides and approval requests will appear here.' : 'Try another filter or search.'}
+            rowClassName={(row) => (row.status === 'Pending' ? 'bg-warning-subtle/40' : undefined)}
+            onRowClick={(row) => {
+              if (row.kind === 'Request') {
+                void navigate({ to: '/my-trips/$approvalId', params: { approvalId: row.id } })
+              }
+            }}
+            rowActions={(row) => [
+              ...(row.kind === 'Request'
+                ? [{ label: 'View request', onSelect: () => { void navigate({ to: '/my-trips/$approvalId', params: { approvalId: row.id } }) } }]
+                : []),
+              { label: 'Copy reference', onSelect: () => { void navigator.clipboard.writeText(row.id).then(() => { toast.notify('Reference copied') }) } },
+              { label: 'Book again', onSelect: () => { void navigate({ to: '/book' }) } },
+            ]}
+          />
+
+          <Pagination list={trips} />
+        </>
       )}
     </div>
   )

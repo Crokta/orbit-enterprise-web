@@ -66,7 +66,7 @@ export function AppShell() {
 
   const approvals = useQuery({
     queryKey: queryKeys.approvals.queue(),
-    queryFn: enterprise.approvals.queue,
+    queryFn: () => enterprise.approvals.queue({ limit: 200 }),
     enabled: me.data?.isApprover === true,
     refetchInterval: 60_000,
   })
@@ -96,7 +96,7 @@ export function AppShell() {
         <ul className="flex-1 space-y-0.5 px-3">
           {items.map((item) => {
             const active = item.prefix === true ? pathname.startsWith(item.to) : pathname === item.to
-            const count = item.badge === 'approvals' ? (approvals.data?.length ?? 0) : 0
+            const count = item.badge === 'approvals' ? (approvals.data?.items.length ?? 0) : 0
 
             return (
               <li key={item.to}>

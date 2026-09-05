@@ -1,18 +1,20 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMemo, useState } from 'react'
 
 import { Badge } from '../../components/ui/Badge'
 import { Banner } from '../../components/ui/Banner'
 import { Button } from '../../components/ui/Button'
 import { Icon } from '../../components/ui/Icon'
+import { SearchInput } from '../../components/ui/Inputs'
+import { ExportButton, FilterSelect, ListToolbar, Pagination } from '../../components/ui/ListControls'
 import { LoadError } from '../../components/ui/LoadError'
 import { PageHeader } from '../../components/ui/PageHeader'
 import { useToast } from '../../components/ui/Toast'
 import { cn } from '../../components/ui/cn'
 import { enterprise, type ApiKey, type ApiKeyCreated, type ApiKeyScope } from '../../lib/api/enterprise'
 import { ApiError } from '../../lib/api/problem'
-import { downloadCsv } from '../../lib/csv'
 import { formatDate, formatRelative, formatTime } from '../../lib/format'
+import { useDebounced, usePagedList } from '../../lib/paging'
 import { queryKeys } from '../../lib/query/client'
 import { CreateApiKeyDialog } from './CreateApiKeyDialog'
 
@@ -30,7 +32,19 @@ export function ApiKeysPage() {
   const [creating, setCreating] = useState(false)
   const [created, setCreated] = useState<ApiKeyCreated | null>(null)
 
-  const keys = useQuery({ queryKey: queryKeys.apiKeys, queryFn: enterprise.apiKeys.list })
+  const [query, setQuery] = useState('')
+  const [environment, setEnvironment] = useState<'all' | 'Live' | 'Sandbox'>('all')
+  const q = useDebounced(query.trim())
+  const params = useMemo(
+    () => ({ q: q.length === 0 ? undefined : q, environment: environment === 'all' ? undefined : environment }),
+    [q, environment],
+  )
+
+  const keys = usePagedList<ApiKey, typeof params>({
+    key: queryKeys.apiKeys,
+    filters: params,
+    fetchPage: (page) => enterprise.apiKeys.list(page),
+  })
 
   function invalidate() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.apiKeys })
@@ -48,20 +62,9 @@ export function ApiKeysPage() {
     onError: (error) => { toast.notify(error instanceof ApiError ? error.message : 'The key could not be revoked.', 'danger') },
   })
 
-  const all = keys.data ?? []
+  const all = keys.items
   const active = all.filter((key) => key.status === 'Active' || key.status === 'Expiring')
   const retired = all.filter((key) => key.status === 'Revoked' || key.status === 'Expired')
-
-  function exportKeys() {
-    downloadCsv(
-      `orbit-api-keys-${new Date().toISOString().slice(0, 10)}.csv`,
-      ['Name', 'Environment', 'Key', 'Permissions', 'Status', 'Created by', 'Created', 'Last used', 'Expires', 'Revoked'],
-      all.map((key) => [
-        key.name, key.environment, key.hint, key.scopes.map((scope) => SCOPE_LABELS[scope]).join('; '),
-        key.status, key.createdBy, key.createdAt, key.lastUsedAt, key.expiresAt, key.revokedAt,
-      ]),
-    )
-  }
 
   return (
     <div className="space-y-5">
@@ -70,18 +73,32 @@ export function ApiKeysPage() {
         subtitle="Server-to-server access for your travel and expense systems"
         actions={
           <>
-            <Button variant="secondary" onClick={exportKeys} disabled={all.length === 0}>Export</Button>
+            <ExportButton path={enterprise.apiKeys.exportPath} query={params} filename="orbit-api-keys.csv" />
             <Button onClick={() => { setCreating(true); }}>Create key</Button>
           </>
         }
       />
 
+      <ListToolbar>
+        <SearchInput value={query} onChange={setQuery} placeholder="Search keys by name or hint" className="w-[280px]" />
+        <FilterSelect
+          label="Environment"
+          value={environment}
+          onChange={setEnvironment}
+          options={[
+            { value: 'all', label: 'Live and sandbox' },
+            { value: 'Live', label: 'Live' },
+            { value: 'Sandbox', label: 'Sandbox' },
+          ]}
+        />
+      </ListToolbar>
+
       <Banner tone="warning">
         Secret keys are shown once at creation and never again. Rotate a key if you suspect exposure — rotation keeps the old key valid for 24 hours.
       </Banner>
 
-      {keys.isError ? (
-        <LoadError error={keys.error} what="the API keys" onRetry={() => { void keys.refetch() }} />
+      {keys.query.isError ? (
+        <LoadError error={keys.query.error} what="the API keys" onRetry={() => { void keys.query.refetch() }} />
       ) : (
         <section className="rounded-xl border border-line-subtle bg-surface shadow-[var(--shadow-e1)]">
           <header className="border-b border-line-subtle px-4 py-4">
@@ -89,7 +106,7 @@ export function ApiKeysPage() {
             <p className="text-[12px] text-fg-tertiary">{active.length} of 10 keys used</p>
           </header>
 
-          {keys.isPending ? (
+          {keys.query.isPending ? (
             <p className="px-4 py-10 text-center text-[13px] text-fg-tertiary">Loading…</p>
           ) : active.length === 0 ? (
             <p className="px-4 py-10 text-center text-[13px] text-fg-tertiary">No keys yet. Create one to connect an expense or travel system.</p>
@@ -159,6 +176,8 @@ export function ApiKeysPage() {
           </ul>
         </section>
       )}
+
+      {!keys.query.isError && <Pagination list={keys} />}
 
       <CreateApiKeyDialog
         open={creating}

@@ -1,11 +1,12 @@
-import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 
 import { Badge } from '../../components/ui/Badge'
 import { Banner } from '../../components/ui/Banner'
 import { Button } from '../../components/ui/Button'
 import { DefinitionRow } from '../../components/ui/Card'
 import { Dialog } from '../../components/ui/Dialog'
+import { SearchInput } from '../../components/ui/Inputs'
+import { ExportButton, FilterSelect, ListToolbar, Pagination } from '../../components/ui/ListControls'
 import { LoadError } from '../../components/ui/LoadError'
 import { Money } from '../../components/ui/Money'
 import { PageHeader } from '../../components/ui/PageHeader'
@@ -15,6 +16,7 @@ import { useToast } from '../../components/ui/Toast'
 import { enterprise, type Invoice } from '../../lib/api/enterprise'
 import { downloadCsv } from '../../lib/csv'
 import { formatCount, formatDate, formatMoney, formatPeriod, formatShortDate } from '../../lib/format'
+import { useDebounced, usePagedList } from '../../lib/paging'
 import { queryKeys } from '../../lib/query/client'
 
 /** Monthly consolidated billing. */
@@ -23,9 +25,18 @@ export function InvoicesPage() {
   const [paying, setPaying] = useState<Invoice | null>(null)
   const [downloading, setDownloading] = useState<string | null>(null)
 
-  const invoices = useQuery({ queryKey: queryKeys.invoices.list({}), queryFn: enterprise.invoices.list })
+  const [query, setQuery] = useState('')
+  const [status, setStatus] = useState<'all' | 'outstanding' | 'overdue' | 'paid'>('all')
+  const q = useDebounced(query.trim())
+  const params = useMemo(() => ({ q: q.length === 0 ? undefined : q, status: status === 'all' ? undefined : status }), [q, status])
 
-  const rows = invoices.data ?? []
+  const invoices = usePagedList<Invoice, typeof params>({
+    key: queryKeys.invoices.all,
+    filters: params,
+    fetchPage: (page) => enterprise.invoices.list(page),
+  })
+
+  const rows = invoices.items
   const outstanding = rows.filter((invoice) => invoice.status === 'Due' || invoice.status === 'Overdue')
   const outstandingMinor = outstanding.reduce((sum, invoice) => sum + invoice.totalMinor, 0)
   const currency = rows[0]?.currency ?? 'NGN'
@@ -33,23 +44,6 @@ export function InvoicesPage() {
 
   const now = new Date()
   const nextInvoice = new Date(now.getFullYear(), now.getMonth() + 1, 1)
-
-  function exportList() {
-    downloadCsv(
-      `orbit-invoices-${now.toISOString().slice(0, 10)}.csv`,
-      ['Invoice', 'Period', 'Issued', 'Due', 'Rides', 'Amount', 'Currency', 'Status'],
-      rows.map((invoice) => [
-        invoice.invoiceId,
-        formatPeriod(invoice.period, now),
-        invoice.issuedAt,
-        invoice.dueAt,
-        invoice.tripCount,
-        formatMoney(invoice.totalMinor, invoice.currency, { fraction: true }),
-        invoice.currency,
-        invoice.status,
-      ]),
-    )
-  }
 
   /** Downloads one invoice as a statement: header, then every trip billed on it. */
   async function downloadStatement(invoice: Invoice) {
@@ -96,19 +90,34 @@ export function InvoicesPage() {
       <PageHeader
         title="Invoices"
         subtitle={
-          invoices.data === undefined
+          invoices.query.data === undefined
             ? undefined
-            : `${formatMoney(outstandingMinor, currency, { compact: true })} outstanding · next invoice ${formatShortDate(nextInvoice)}`
+            : `${formatMoney(outstandingMinor, currency, { compact: true })} outstanding on this page · next invoice ${formatShortDate(nextInvoice)}`
         }
         actions={
           <>
-            <Button variant="secondary" onClick={exportList} disabled={rows.length === 0}>Export</Button>
+            <ExportButton path={enterprise.invoices.exportPath} query={params} filename="orbit-invoices.csv" />
             <Button onClick={() => { void downloadAll() }} disabled={rows.length === 0} loading={downloading !== null}>
-              Download all
+              Download statements
             </Button>
           </>
         }
       />
+
+      <ListToolbar>
+        <SearchInput value={query} onChange={setQuery} placeholder="Search invoice number or period" className="w-[300px]" />
+        <FilterSelect
+          label="Status"
+          value={status}
+          onChange={setStatus}
+          options={[
+            { value: 'all', label: 'All invoices' },
+            { value: 'outstanding', label: 'Outstanding' },
+            { value: 'overdue', label: 'Overdue' },
+            { value: 'paid', label: 'Paid' },
+          ]}
+        />
+      </ListToolbar>
 
       {overdue !== undefined && (
         <Banner
@@ -120,9 +129,10 @@ export function InvoicesPage() {
         </Banner>
       )}
 
-      {invoices.isError ? (
-        <LoadError error={invoices.error} what="the invoices" onRetry={() => { void invoices.refetch() }} />
+      {invoices.query.isError ? (
+        <LoadError error={invoices.query.error} what="the invoices" onRetry={() => { void invoices.query.refetch() }} />
       ) : (
+        <>
         <Table<Invoice>
           minWidth={900}
           columns={[
@@ -139,15 +149,17 @@ export function InvoicesPage() {
           ]}
           rows={rows}
           rowKey={(row) => row.invoiceId}
-          isPending={invoices.isPending}
-          emptyTitle="No invoices have been issued yet"
-          emptyHint="The first invoice is raised on the first of the month after your first ride."
+          isPending={invoices.query.isPending}
+          emptyTitle={q.length > 0 || status !== 'all' ? 'No invoices match' : 'No invoices have been issued yet'}
+          emptyHint={q.length > 0 || status !== 'all' ? 'Try another search or filter.' : 'The first invoice is raised on the first of the month after your first ride.'}
           rowActions={(row) => [
             { label: 'Download statement', onSelect: () => { void downloadStatement(row) } },
             ...(row.status === 'Due' || row.status === 'Overdue' ? [{ label: 'Pay now', onSelect: () => { setPaying(row) } }] : []),
             { label: 'Copy invoice number', onSelect: () => { void navigator.clipboard.writeText(row.invoiceId).then(() => { toast.notify('Invoice number copied') }) } },
           ]}
         />
+        <Pagination list={invoices} />
+        </>
       )}
 
       <PayDialog invoice={paying} onClose={() => { setPaying(null); }} />

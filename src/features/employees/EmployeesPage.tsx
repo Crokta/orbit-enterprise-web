@@ -5,16 +5,17 @@ import { Avatar } from '../../components/ui/Avatar'
 import { Button } from '../../components/ui/Button'
 import { ChipGroup } from '../../components/ui/Chip'
 import { SearchInput } from '../../components/ui/Inputs'
+import { ExportButton, FilterSelect, ListToolbar, Pagination } from '../../components/ui/ListControls'
 import { LoadError } from '../../components/ui/LoadError'
 import { Money } from '../../components/ui/Money'
 import { PageHeader } from '../../components/ui/PageHeader'
 import { StatusPill } from '../../components/ui/StatusPill'
 import { Table, TwoLine } from '../../components/ui/Table'
 import { useToast } from '../../components/ui/Toast'
-import { displayName, enterprise, type Employee, type Policy } from '../../lib/api/enterprise'
+import { displayName, enterprise, type Employee, type EmployeeListParams, type Policy } from '../../lib/api/enterprise'
 import { ApiError } from '../../lib/api/problem'
-import { downloadCsv } from '../../lib/csv'
 import { formatCount, formatMoney } from '../../lib/format'
+import { useDebounced, usePagedList } from '../../lib/paging'
 import { queryKeys } from '../../lib/query/client'
 import { useSearchParam } from '../../lib/router'
 import { useMe } from '../session/useMe'
@@ -22,8 +23,15 @@ import { EditEmployeeDialog } from './EditEmployeeDialog'
 import { InviteEmployeeDialog } from './InviteEmployeeDialog'
 
 type Filter = 'all' | 'enabled' | 'never' | 'suspended'
+type RoleFilter = 'any' | 'Member' | 'TravelAdmin' | 'BillingAdmin' | 'Owner'
 
-/** Who at the company can book, and what they are spending. */
+/**
+ * Who at the company can book, and what they are spending.
+ *
+ * Searched, filtered and paged on the server. The roster used to arrive whole and be
+ * sifted in the browser, which is fine at forty people and a table that never finishes
+ * rendering at four thousand.
+ */
 export function EmployeesPage() {
   const me = useMe()
   const queryClient = useQueryClient()
@@ -32,12 +40,33 @@ export function EmployeesPage() {
 
   const [query, setQuery] = useState(initialQuery)
   const [filter, setFilter] = useState<Filter>('all')
+  const [role, setRole] = useState<RoleFilter>('any')
+  const [costCentre, setCostCentre] = useState('any')
   const [inviting, setInviting] = useState(false)
   const [editing, setEditing] = useState<Employee | null>(null)
 
-  const employees = useQuery({ queryKey: queryKeys.employees.list({}), queryFn: enterprise.employees.list })
-  const policies = useQuery({ queryKey: queryKeys.policies.all, queryFn: enterprise.policies.list })
-  const costCentres = useQuery({ queryKey: queryKeys.costCentres.all, queryFn: enterprise.costCentres.list })
+  const q = useDebounced(query.trim())
+
+  const params = useMemo<EmployeeListParams>(
+    () => ({
+      q: q.length === 0 ? undefined : q,
+      status: filter === 'enabled' ? 'Active' : filter === 'suspended' ? 'Suspended' : undefined,
+      neverTravelled: filter === 'never' ? true : undefined,
+      role: role === 'any' ? undefined : role,
+      costCentre: costCentre === 'any' ? undefined : costCentre,
+    }),
+    [q, filter, role, costCentre],
+  )
+
+  const employees = usePagedList<Employee, EmployeeListParams>({
+    key: queryKeys.employees.all,
+    filters: params,
+    fetchPage: (page) => enterprise.employees.list(page),
+  })
+
+  // Dropdown sources: bounded by the company, so one page of two hundred is the lot.
+  const policies = useQuery({ queryKey: queryKeys.policies.all, queryFn: () => enterprise.policies.list({ limit: 200 }) })
+  const costCentres = useQuery({ queryKey: queryKeys.costCentres.all, queryFn: () => enterprise.costCentres.list({ limit: 200 }) })
 
   function invalidate() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.employees.all })
@@ -67,67 +96,33 @@ export function EmployeesPage() {
     onError: (error) => { toast.notify(describe(error, 'The change could not be saved.'), 'danger') },
   })
 
-  const policyById = useMemo(() => new Map((policies.data ?? []).map((policy) => [policy.policyId, policy])), [policies.data])
+  const policyItems = useMemo(() => policies.data?.items ?? [], [policies.data])
+  const costCentreItems = useMemo(() => costCentres.data?.items ?? [], [costCentres.data])
+
+  const policyById = useMemo(() => new Map(policyItems.map((policy) => [policy.policyId, policy])), [policyItems])
   const defaultPolicy = useMemo(
-    () => [...(policies.data ?? [])].filter((policy) => policy.isActive).sort((a, b) => a.policyId.localeCompare(b.policyId))[0],
-    [policies.data],
+    () => [...policyItems].filter((policy) => policy.isActive).sort((a, b) => a.policyId.localeCompare(b.policyId))[0],
+    [policyItems],
   )
 
-  const rows = useMemo(() => {
-    const needle = query.trim().toLowerCase()
-
-    return (employees.data ?? []).filter((employee) => {
-      if (filter === 'enabled' && employee.status !== 'Active') return false
-      if (filter === 'never' && (employee.status !== 'Active' || employee.tripsThisMonth > 0)) return false
-      if (filter === 'suspended' && employee.status !== 'Suspended') return false
-
-      if (needle.length === 0) return true
-
-      return [employee.displayName ?? '', employee.workEmail, employee.employeeId, employee.costCentre ?? '']
-        .join(' ')
-        .toLowerCase()
-        .includes(needle)
-    })
-  }, [employees.data, query, filter])
-
-  const all = employees.data ?? []
-  const enabled = all.filter((employee) => employee.status === 'Active').length
-
-  function exportRoster() {
-    downloadCsv(
-      `orbit-employees-${new Date().toISOString().slice(0, 10)}.csv`,
-      ['Name', 'Work email', 'Status', 'Role', 'Cost centre', 'Policy', 'Approver', 'Rides (MTD)', 'Spend (MTD)', 'Currency', 'Invited'],
-      rows.map((employee) => [
-        employee.displayName,
-        employee.workEmail,
-        employee.status,
-        employee.role,
-        employee.costCentre,
-        policyLabel(employee, policyById, defaultPolicy),
-        employee.isApprover ? 'Yes' : 'No',
-        employee.tripsThisMonth,
-        formatMoney(employee.monthlySpendMinor, employee.currency, { fraction: true }),
-        employee.currency,
-        employee.invitedAt,
-      ]),
-    )
-  }
+  const rows = employees.items
+  const filtered = q.length > 0 || filter !== 'all' || role !== 'any' || costCentre !== 'any'
 
   return (
     <div className="space-y-5">
       <PageHeader
         title="Employees"
-        subtitle={employees.data === undefined ? undefined : `${formatCount(all.length)} employees · ${formatCount(enabled)} with travel enabled`}
+        subtitle={me.data === undefined ? undefined : `${formatCount(me.data.company.employees)} employees on the account`}
         actions={
           <>
-            <Button variant="secondary" onClick={exportRoster} disabled={rows.length === 0}>Export</Button>
+            <ExportButton path={enterprise.employees.exportPath} query={{ ...params }} filename="orbit-employees.csv" />
             <Button onClick={() => { setInviting(true); }}>Invite employee</Button>
           </>
         }
       />
 
-      <div className="flex flex-wrap items-center gap-4">
-        <SearchInput value={query} onChange={setQuery} placeholder="Search name, email or ID" className="w-[320px]" />
+      <ListToolbar>
+        <SearchInput value={query} onChange={setQuery} placeholder="Search name, email or cost centre" className="w-[300px]" />
         <ChipGroup<Filter>
           label="Filter employees"
           value={filter}
@@ -139,72 +134,93 @@ export function EmployeesPage() {
             { value: 'suspended', label: 'Suspended' },
           ]}
         />
-      </div>
-
-      {employees.isError ? (
-        <LoadError error={employees.error} what="the employee list" onRetry={() => { void employees.refetch() }} />
-      ) : (
-        <Table<Employee>
-          minWidth={960}
-          columns={[
-            {
-              key: 'employee',
-              header: 'Employee',
-              render: (row) => (
-                <div className="flex items-center gap-3">
-                  <Avatar name={displayName(row)} size="sm" />
-                  <TwoLine primary={displayName(row)} secondary={row.workEmail} mono />
-                </div>
-              ),
-            },
-            { key: 'cc', header: 'Cost centre', render: (row) => row.costCentre ?? <span className="text-fg-tertiary">—</span> },
-            { key: 'policy', header: 'Policy', render: (row) => policyLabel(row, policyById, defaultPolicy) },
-            {
-              key: 'status',
-              header: 'Status',
-              render: (row) => (
-                <div className="flex items-center gap-2">
-                  <StatusPill status={row.status === 'Active' ? 'active' : row.status === 'Invited' ? 'invited' : 'suspended'} />
-                  {row.isApprover && <span className="text-[11px] font-medium text-fg-tertiary">Approver</span>}
-                </div>
-              ),
-            },
-            { key: 'rides', header: 'Rides (MTD)', align: 'right', render: (row) => <span className="font-mono tabular">{row.tripsThisMonth}</span> },
-            {
-              key: 'spend',
-              header: 'Spend (MTD)',
-              align: 'right',
-              sorted: true,
-              render: (row) => <Money minorUnits={row.monthlySpendMinor} currency={row.currency} />,
-            },
+        <FilterSelect<RoleFilter>
+          label="Role"
+          value={role}
+          onChange={setRole}
+          options={[
+            { value: 'any', label: 'Any role' },
+            { value: 'Member', label: 'Member' },
+            { value: 'TravelAdmin', label: 'Travel admin' },
+            { value: 'BillingAdmin', label: 'Billing admin' },
+            { value: 'Owner', label: 'Owner' },
           ]}
-          rows={rows}
-          rowKey={(row) => row.employeeId}
-          isPending={employees.isPending}
-          emptyTitle={query.length > 0 || filter !== 'all' ? 'No employees match' : 'No employees have been invited yet'}
-          emptyHint={query.length > 0 || filter !== 'all' ? 'Try a different filter or search.' : 'Invite someone to give them a seat on the company account.'}
-          rowActions={(row) => {
-            const self = row.employeeId === me.data?.employeeId
-
-            return [
-              { label: 'Edit cost centre or policy', onSelect: () => { setEditing(row) } },
-              {
-                label: row.isApprover ? 'Remove as approver' : 'Make an approver',
-                onSelect: () => { approver.mutate({ employee: row, isApprover: !row.isApprover }) },
-              },
-              row.status === 'Suspended'
-                ? { label: 'Reinstate', onSelect: () => { reinstate.mutate(row) } }
-                : { label: 'Suspend access', tone: 'danger', disabled: self, onSelect: () => { suspend.mutate(row) } },
-            ]
-          }}
         />
+        <FilterSelect
+          label="Cost centre"
+          value={costCentre}
+          onChange={setCostCentre}
+          options={[{ value: 'any', label: 'Any cost centre' }, ...costCentreItems.map((centre) => ({ value: centre.code, label: `${centre.code} · ${centre.name}` }))]}
+        />
+      </ListToolbar>
+
+      {employees.query.isError ? (
+        <LoadError error={employees.query.error} what="the employee list" onRetry={() => { void employees.query.refetch() }} />
+      ) : (
+        <>
+          <Table<Employee>
+            minWidth={960}
+            columns={[
+              {
+                key: 'employee',
+                header: 'Employee',
+                render: (row) => (
+                  <div className="flex items-center gap-3">
+                    <Avatar name={displayName(row)} size="sm" />
+                    <TwoLine primary={displayName(row)} secondary={row.workEmail} mono />
+                  </div>
+                ),
+              },
+              { key: 'cc', header: 'Cost centre', render: (row) => row.costCentre ?? <span className="text-fg-tertiary">—</span> },
+              { key: 'policy', header: 'Policy', render: (row) => policyLabel(row, policyById, defaultPolicy) },
+              {
+                key: 'status',
+                header: 'Status',
+                render: (row) => (
+                  <div className="flex items-center gap-2">
+                    <StatusPill status={row.status === 'Active' ? 'active' : row.status === 'Invited' ? 'invited' : 'suspended'} />
+                    {row.isApprover && <span className="text-[11px] font-medium text-fg-tertiary">Approver</span>}
+                  </div>
+                ),
+              },
+              { key: 'rides', header: 'Rides (MTD)', align: 'right', render: (row) => <span className="font-mono tabular">{row.tripsThisMonth}</span> },
+              {
+                key: 'spend',
+                header: 'Spend (MTD)',
+                align: 'right',
+                render: (row) => <Money minorUnits={row.monthlySpendMinor} currency={row.currency} />,
+              },
+            ]}
+            rows={rows}
+            rowKey={(row) => row.employeeId}
+            isPending={employees.query.isPending}
+            emptyTitle={filtered ? 'No employees match' : 'No employees have been invited yet'}
+            emptyHint={filtered ? 'Try a different filter or search.' : 'Invite someone to give them a seat on the company account.'}
+            rowActions={(row) => {
+              const self = row.employeeId === me.data?.employeeId
+
+              return [
+                { label: 'Edit cost centre or policy', onSelect: () => { setEditing(row) } },
+                {
+                  label: row.isApprover ? 'Remove as approver' : 'Make an approver',
+                  onSelect: () => { approver.mutate({ employee: row, isApprover: !row.isApprover }) },
+                },
+                row.status === 'Suspended'
+                  ? { label: 'Reinstate', onSelect: () => { reinstate.mutate(row) } }
+                  : { label: 'Suspend access', tone: 'danger', disabled: self, onSelect: () => { suspend.mutate(row) } },
+              ]
+            }}
+          />
+
+          <Pagination list={employees} />
+        </>
       )}
 
       <InviteEmployeeDialog
         open={inviting}
         onClose={() => { setInviting(false); }}
-        policies={policies.data ?? []}
-        costCentres={costCentres.data ?? []}
+        policies={policyItems}
+        costCentres={costCentreItems}
         verifiedDomain={me.data?.company.verifiedDomain ?? null}
         onInvited={(employee) => {
           setInviting(false)
@@ -216,8 +232,8 @@ export function EmployeesPage() {
       <EditEmployeeDialog
         employee={editing}
         onClose={() => { setEditing(null); }}
-        policies={policies.data ?? []}
-        costCentres={costCentres.data ?? []}
+        policies={policyItems}
+        costCentres={costCentreItems}
         onSaved={(employee) => {
           setEditing(null)
           toast.notify(`${displayName(employee)} updated`)

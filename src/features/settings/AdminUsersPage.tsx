@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 
 import { Avatar } from '../../components/ui/Avatar'
 import { Badge } from '../../components/ui/Badge'
 import { Banner } from '../../components/ui/Banner'
 import { Button } from '../../components/ui/Button'
 import { Icon } from '../../components/ui/Icon'
+import { SearchInput } from '../../components/ui/Inputs'
+import { ExportButton, ListToolbar, Pagination } from '../../components/ui/ListControls'
 import { LoadError } from '../../components/ui/LoadError'
 import { type MenuItem } from '../../components/ui/Menu'
 import { PageHeader } from '../../components/ui/PageHeader'
@@ -13,8 +15,8 @@ import { Table, TwoLine } from '../../components/ui/Table'
 import { useToast } from '../../components/ui/Toast'
 import { ROLE_LABELS, type AdminRole, type Employee, displayName, enterprise, isAdmin } from '../../lib/api/enterprise'
 import { ApiError } from '../../lib/api/problem'
-import { downloadCsv } from '../../lib/csv'
 import { formatCount, formatRelative } from '../../lib/format'
+import { useDebounced, usePagedList } from '../../lib/paging'
 import { queryKeys } from '../../lib/query/client'
 import { useMe } from '../session/useMe'
 import { InviteAdminDialog } from './InviteAdminDialog'
@@ -52,7 +54,22 @@ export function AdminUsersPage() {
   const toast = useToast()
   const [inviting, setInviting] = useState(false)
 
-  const employees = useQuery({ queryKey: queryKeys.employees.list({}), queryFn: enterprise.employees.list })
+  const [query, setQuery] = useState('')
+  const q = useDebounced(query.trim())
+  const params = useMemo(() => ({ admins: true, q: q.length === 0 ? undefined : q }), [q])
+
+  const employees = usePagedList<Employee, typeof params>({
+    key: [...queryKeys.employees.all, 'admins'],
+    filters: params,
+    fetchPage: (page) => enterprise.employees.list(page),
+  })
+
+  // The dialog picks from everyone who is not yet an admin; bounded by the company.
+  const candidates = useQuery({
+    queryKey: queryKeys.employees.list({ forDialog: 'admins' }),
+    queryFn: () => enterprise.employees.list({ limit: 200 }),
+    enabled: inviting,
+  })
 
   const setRole = useMutation({
     mutationFn: ({ employee, role }: { employee: Employee; role: AdminRole }) => enterprise.employees.setRole(employee.employeeId, role),
@@ -66,37 +83,34 @@ export function AdminUsersPage() {
     },
   })
 
-  const admins = (employees.data ?? []).filter((employee) => isAdmin(employee.role) && employee.status !== 'Suspended')
+  const admins = employees.items.filter((employee) => isAdmin(employee.role) && employee.status !== 'Suspended')
   const owners = admins.filter((employee) => employee.role === 'Owner').length
-
-  function exportAdmins() {
-    downloadCsv(
-      `orbit-admins-${new Date().toISOString().slice(0, 10)}.csv`,
-      ['Name', 'Work email', 'Role', 'Can see rider data', 'Status', 'Activated'],
-      admins.map((employee) => [displayName(employee), employee.workEmail, ROLE_LABELS[employee.role], employee.role === 'BillingAdmin' ? 'No' : 'Yes', employee.status, employee.activatedAt]),
-    )
-  }
 
   return (
     <div className="space-y-5">
       <PageHeader
         title="Admin users"
-        subtitle={employees.data === undefined ? undefined : `${formatCount(admins.length)} admins · roles control what each can see and change`}
+        subtitle={employees.query.data === undefined ? undefined : `${formatCount(admins.length)}${employees.hasNext ? '+' : ''} admins · roles control what each can see and change`}
         actions={
           <>
-            <Button variant="secondary" onClick={exportAdmins} disabled={admins.length === 0}>Export</Button>
+            <ExportButton path={enterprise.employees.exportPath} query={params} filename="orbit-admins.csv" />
             <Button onClick={() => { setInviting(true); }}>Invite admin</Button>
           </>
         }
       />
 
+      <ListToolbar>
+        <SearchInput value={query} onChange={setQuery} placeholder="Search admins by name or email" className="w-[300px]" />
+      </ListToolbar>
+
       <Banner tone="info">
         An organisation must keep at least two Owners. Billing admins can see invoices but never ride routes or rider names.
       </Banner>
 
-      {employees.isError ? (
-        <LoadError error={employees.error} what="the admin list" onRetry={() => { void employees.refetch() }} />
+      {employees.query.isError ? (
+        <LoadError error={employees.query.error} what="the admin list" onRetry={() => { void employees.query.refetch() }} />
       ) : (
+        <>
         <Table<Employee>
           columns={[
             {
@@ -116,7 +130,7 @@ export function AdminUsersPage() {
           ]}
           rows={admins}
           rowKey={(row) => row.employeeId}
-          isPending={employees.isPending}
+          isPending={employees.query.isPending}
           emptyTitle="No admins yet"
           rowActions={(row) => {
             const self = row.employeeId === me.data?.employeeId
@@ -146,6 +160,8 @@ export function AdminUsersPage() {
             return items
           }}
         />
+        <Pagination list={employees} />
+        </>
       )}
 
       <section className="rounded-xl border border-line-subtle bg-surface p-4 shadow-[var(--shadow-e1)]">
@@ -177,7 +193,7 @@ export function AdminUsersPage() {
       <InviteAdminDialog
         open={inviting}
         onClose={() => { setInviting(false); }}
-        employees={(employees.data ?? []).filter((employee) => employee.status !== 'Suspended')}
+        employees={(candidates.data?.items ?? []).filter((employee) => employee.status !== 'Suspended')}
         owners={owners}
         onInvited={(employee) => {
           setInviting(false)

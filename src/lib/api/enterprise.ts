@@ -133,6 +133,42 @@ export interface Page<T> {
   readonly nextCursor: string | null
 }
 
+/** What every list endpoint accepts on top of its own filters. */
+export interface ListParams {
+  readonly cursor?: string | undefined
+  readonly limit?: number | undefined
+  readonly q?: string | undefined
+}
+
+export interface EmployeeListParams extends ListParams {
+  readonly status?: EmployeeStatus | undefined
+  readonly role?: AdminRole | undefined
+  readonly costCentre?: string | undefined
+  readonly policyId?: string | undefined
+  readonly admins?: boolean | undefined
+  readonly neverTravelled?: boolean | undefined
+}
+
+export interface TripListParams extends ListParams {
+  readonly employeeId?: string | undefined
+  readonly costCentre?: string | undefined
+  readonly breaches?: boolean | undefined
+  readonly from?: string | undefined
+  readonly to?: string | undefined
+}
+
+export interface MyTripListParams extends ListParams {
+  readonly kind?: 'Ride' | 'Request' | undefined
+  readonly status?: string | undefined
+}
+
+export interface MonthSummary {
+  readonly month: string
+  readonly rides: number
+  readonly spendMinor: number
+  readonly currency: string
+}
+
 export type InvoiceStatus = 'Due' | 'Paid' | 'Overdue' | 'Voided'
 
 export interface Invoice {
@@ -242,7 +278,8 @@ export const enterprise = {
   dashboard: () => api.get<Dashboard>(`${BASE}/dashboard`),
 
   employees: {
-    list: () => api.get<readonly Employee[]>(`${BASE}/employees`),
+    list: (params: EmployeeListParams = {}) => api.get<Page<Employee>>(`${BASE}/employees`, { query: { ...params } }),
+    exportPath: `${BASE}/employees/export.csv`,
     invite: (body: {
       readonly workEmail: string
       readonly displayName: string | null
@@ -268,14 +305,18 @@ export const enterprise = {
   },
 
   policies: {
-    list: () => api.get<readonly Policy[]>(`${BASE}/policies`),
+    list: (params: ListParams & { readonly active?: boolean | undefined } = {}) =>
+      api.get<Page<Policy>>(`${BASE}/policies`, { query: { ...params } }),
+    exportPath: `${BASE}/policies/export.csv`,
     create: (rules: PolicyRules) => api.post<Policy>(`${BASE}/policies`, { json: rules }),
     update: (policyId: string, rules: PolicyRules, isActive: boolean) =>
       api.put<Policy>(`${BASE}/policies/${policyId}`, { json: { rules, isActive } }),
   },
 
   costCentres: {
-    list: () => api.get<readonly CostCentre[]>(`${BASE}/cost-centres`),
+    list: (params: ListParams & { readonly active?: boolean | undefined } = {}) =>
+      api.get<Page<CostCentre>>(`${BASE}/cost-centres`, { query: { ...params } }),
+    exportPath: `${BASE}/cost-centres/export.csv`,
     create: (body: {
       readonly code: string
       readonly name: string
@@ -286,17 +327,21 @@ export const enterprise = {
   },
 
   trips: {
-    page: (cursor: string | undefined, limit = 50) =>
-      api.get<Page<Trip>>(`${BASE}/trips`, { query: { cursor, limit } }),
+    page: (params: TripListParams = {}) => api.get<Page<Trip>>(`${BASE}/trips`, { query: { ...params } }),
+    exportPath: `${BASE}/trips/export.csv`,
   },
 
   invoices: {
-    list: () => api.get<readonly Invoice[]>(`${BASE}/invoices`),
+    list: (params: ListParams & { readonly status?: string | undefined } = {}) =>
+      api.get<Page<Invoice>>(`${BASE}/invoices`, { query: { ...params } }),
+    exportPath: `${BASE}/invoices/export.csv`,
     statement: (invoiceId: string) => api.get<InvoiceStatement>(`${BASE}/invoices/${invoiceId}/statement`),
   },
 
   approvals: {
-    queue: () => api.get<readonly Approval[]>(`${BASE}/approvals`),
+    queue: (params: ListParams & { readonly status?: string | undefined; readonly employeeId?: string | undefined } = {}) =>
+      api.get<Page<Approval>>(`${BASE}/approvals`, { query: { ...params } }),
+    exportPath: `${BASE}/approvals/export.csv`,
     get: (approvalId: string) => api.get<Approval>(`${BASE}/approvals/${approvalId}`),
     decide: (approvalId: string, approve: boolean, note: string | null) =>
       api.post<Approval>(`${BASE}/approvals/${approvalId}/decide`, { json: { approve, note } }),
@@ -304,7 +349,9 @@ export const enterprise = {
   },
 
   my: {
-    trips: () => api.get<readonly MyTrip[]>(`${BASE}/my/trips`),
+    trips: (params: MyTripListParams = {}) => api.get<Page<MyTrip>>(`${BASE}/my/trips`, { query: { ...params } }),
+    tripsExportPath: `${BASE}/my/trips/export.csv`,
+    expenses: () => api.get<readonly MonthSummary[]>(`${BASE}/my/expenses`),
   },
 
   booking: {
@@ -335,7 +382,9 @@ export const enterprise = {
   },
 
   apiKeys: {
-    list: () => api.get<readonly ApiKey[]>(`${BASE}/api-keys`),
+    list: (params: ListParams & { readonly status?: string | undefined; readonly environment?: ApiKeyEnvironment | undefined } = {}) =>
+      api.get<Page<ApiKey>>(`${BASE}/api-keys`, { query: { ...params } }),
+    exportPath: `${BASE}/api-keys/export.csv`,
     create: (body: { readonly name: string; readonly environment: ApiKeyEnvironment; readonly scopes: readonly ApiKeyScope[] }) =>
       api.post<ApiKeyCreated>(`${BASE}/api-keys`, { json: body }),
     rotate: (keyId: string) => api.post<ApiKeyCreated>(`${BASE}/api-keys/${keyId}/rotate`),
