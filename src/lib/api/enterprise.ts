@@ -17,6 +17,11 @@ export interface Company {
   readonly verifiedDomain: string | null
   readonly currency: string
   readonly employees: number
+  /** draft, onboarding, live, at_risk or churned. */
+  readonly status: 'draft' | 'onboarding' | 'live' | 'at_risk' | 'churned'
+  readonly stage: 'signed' | 'kyb_review' | 'billing_setup' | 'employee_import' | 'policy_go_live' | 'live'
+  /** False until verification passes. The booking screens say so instead of quoting. */
+  readonly canBook: boolean
 }
 
 export interface Policy {

@@ -20,6 +20,8 @@ import { SettingsLayout } from '../features/settings/SettingsLayout'
 import { SignInPage } from '../features/auth/SignInPage'
 import { HomeRedirect } from '../features/session/HomeRedirect'
 import { MyTripsPage } from '../features/trips/MyTripsPage'
+import { OnboardingEntryPage } from '../features/onboarding/OnboardingEntryPage'
+import { SetupWizardPage } from '../features/onboarding/SetupWizardPage'
 import { RequestSentPage } from '../features/trips/RequestSentPage'
 import { TripLogPage } from '../features/trips/TripLogPage'
 
@@ -35,6 +37,19 @@ const signInRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/sign-in',
   component: SignInPage,
+})
+
+/**
+ * The onboarding link lands here, signed in or not.
+ *
+ * Outside the authenticated tree on purpose: the person opening it has no account yet.
+ * The page creates one (or signs an existing one in), claims the company, and only then
+ * hands over to the wizard behind authentication.
+ */
+const onboardingEntryRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/onboarding/$token',
+  component: OnboardingEntryPage,
 })
 
 /**
@@ -97,9 +112,11 @@ const settingsIndexRoute = createRoute({
 
 export const routeTree = rootRoute.addChildren([
   signInRoute,
+  onboardingEntryRoute,
   authenticatedRoute.addChildren([
     // The index sends members to booking and admins to the dashboard.
     page('/', HomeRedirect),
+    page('/setup', SetupWizardPage),
     page('/dashboard', DashboardPage),
     page('/employees', EmployeesPage, true),
     page('/trips', TripLogPage, true),

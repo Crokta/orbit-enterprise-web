@@ -17,5 +17,11 @@ export function HomeRedirect() {
     return null
   }
 
+  // A company still setting up has nothing to show on a dashboard; the wizard is the
+  // home page until it goes live.
+  if (me.data.company.status === 'onboarding' || me.data.company.status === 'draft') {
+    return <Navigate to="/setup" replace />
+  }
+
   return isAdmin(me.data.role) ? <DashboardPage /> : <Navigate to="/book" replace />
 }
