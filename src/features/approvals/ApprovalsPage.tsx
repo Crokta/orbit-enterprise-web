@@ -1,30 +1,37 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
+import { useState } from 'react'
 
+import { Avatar } from '../../components/ui/Avatar'
+import { Badge } from '../../components/ui/Badge'
+import { Banner } from '../../components/ui/Banner'
 import { Button } from '../../components/ui/Button'
+import { Dialog } from '../../components/ui/Dialog'
+import { Icon } from '../../components/ui/Icon'
+import { Field } from '../../components/ui/Inputs'
+import { LoadError } from '../../components/ui/LoadError'
 import { Money } from '../../components/ui/Money'
-import { api } from '../../lib/api/client'
+import { PageHeader } from '../../components/ui/PageHeader'
+import { useToast } from '../../components/ui/Toast'
+import { cn } from '../../components/ui/cn'
+import { canManageTravel, enterprise, type Approval } from '../../lib/api/enterprise'
 import { ApiError } from '../../lib/api/problem'
+import { downloadCsv } from '../../lib/csv'
+import { formatCount, formatMoney, formatUntil, formatWaiting, formatWhen } from '../../lib/format'
 import { queryKeys } from '../../lib/query/client'
-
-interface ApprovalRow {
-  readonly requestId: string
-  readonly employeeName: string
-  readonly pickupLabel: string
-  readonly dropoffLabel: string
-  readonly fareMinor: number
-  readonly currency: string
-  readonly reason: string
-  readonly requestedAt: string
-  readonly costCentre: string
-}
+import { useMe } from '../session/useMe'
 
 /** Trips waiting on a manager's decision. */
 export function ApprovalsPage() {
+  const me = useMe()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const toast = useToast()
+  const [declining, setDeclining] = useState<Approval | null>(null)
 
-  const { data, isPending } = useQuery({
+  const queue = useQuery({
     queryKey: queryKeys.approvals.queue(),
-    queryFn: () => api.get<readonly ApprovalRow[]>('/v1/enterprise/approvals'),
+    queryFn: enterprise.approvals.queue,
 
     // An employee is standing on a pavement waiting for this decision, so the queue
     // refreshes on its own rather than waiting for the manager to reload.
@@ -32,76 +39,207 @@ export function ApprovalsPage() {
   })
 
   const decide = useMutation({
-    mutationFn: ({ requestId, approve }: { requestId: string; approve: boolean }) =>
-      api.post(`/v1/enterprise/approvals/${requestId}/decide`, { json: { approve } }),
-
+    mutationFn: ({ approval, approve, note }: { approval: Approval; approve: boolean; note: string | null }) =>
+      enterprise.approvals.decide(approval.approvalId, approve, note),
+    onSuccess: (result) => {
+      toast.notify(result.status === 'Approved' ? `Approved ${result.employeeName}'s ride` : `Declined ${result.employeeName}'s ride`)
+    },
+    onError: (error) => {
+      toast.notify(
+        error instanceof ApiError && error.status === 409
+          ? 'Someone else has already decided that request.'
+          : error instanceof ApiError && error.code === 'trip_approval.self_approval'
+            ? 'You cannot approve your own trip.'
+            : 'The decision could not be recorded. Please try again.',
+        'danger',
+      )
+    },
     onSettled: () => {
       // Invalidated whether it succeeded or failed. On failure the row may have been
       // decided by someone else, and leaving it on screen invites a second attempt at
       // something already done.
       void queryClient.invalidateQueries({ queryKey: queryKeys.approvals.all })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard })
     },
   })
 
-  if (isPending) {
-    return <p className="text-[13px] text-fg-secondary">Loading approvals…</p>
+  const rows = queue.data ?? []
+  const oldest = rows[0]
+  const policyCap = me.data?.policy?.approvalThresholdMinor ?? null
+  const currency = me.data?.currency ?? 'NGN'
+
+  function exportQueue() {
+    downloadCsv(
+      `orbit-approvals-${new Date().toISOString().slice(0, 10)}.csv`,
+      ['Request', 'Employee', 'Email', 'Cost centre', 'Pick-up', 'Destination', 'Fare', 'Currency', 'Reason', 'Requested', 'Expires'],
+      rows.map((row) => [
+        row.approvalId, row.employeeName, row.employeeEmail, row.costCentreCode, row.pickupLabel, row.dropoffLabel,
+        formatMoney(row.estimatedFareMinor, row.currency, { fraction: true }), row.currency, row.policyReason, row.requestedAt, row.expiresAt,
+      ]),
+    )
   }
 
   return (
-    <div className="max-w-4xl space-y-4">
-      <h1 className="text-[28px] font-semibold leading-[34px]">Approvals</h1>
+    <div className="space-y-5">
+      <PageHeader
+        title="Approvals"
+        subtitle={
+          queue.data === undefined
+            ? undefined
+            : rows.length === 0
+              ? 'Nothing pending'
+              : `${formatCount(rows.length)} pending · oldest waiting ${oldest === undefined ? '' : formatWaiting(oldest.requestedAt)}`
+        }
+        actions={
+          <>
+            <Button variant="secondary" onClick={exportQueue} disabled={rows.length === 0}>Export</Button>
+            {me.data !== undefined && canManageTravel(me.data.role) && (
+              <Button onClick={() => { void navigate({ to: '/policies' }) }}>Approval settings</Button>
+            )}
+          </>
+        }
+      />
 
-      {data?.length === 0 ? (
-        <p className="rounded-lg border border-line-subtle bg-surface p-8 text-center text-[13px] text-fg-tertiary">
-          Nothing is waiting on you.
-        </p>
-      ) : null}
+      <Banner tone="info">
+        Four-eyes approval is on: you cannot approve a ride you requested
+        {policyCap === null ? '.' : `, and rides over ${formatMoney(policyCap, currency)} come here for a decision.`}
+        {' '}Requests expire after 15 minutes if nobody answers.
+      </Banner>
 
-      {data?.map((row) => (
-        <article key={row.requestId} className="rounded-lg border border-line-subtle bg-surface p-4">
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <p className="text-[15px] font-medium">{row.employeeName}</p>
-              <p className="truncate text-[13px] text-fg-secondary">
-                {row.pickupLabel} → {row.dropoffLabel}
-              </p>
-              <p className="mt-1 text-[13px] text-fg-warning">{row.reason}</p>
-              <p className="mt-1 text-[11px] uppercase tracking-wide text-fg-tertiary">{row.costCentre}</p>
-            </div>
+      {queue.isError ? (
+        <LoadError error={queue.error} what="the approval queue" onRetry={() => { void queue.refetch() }} />
+      ) : queue.isPending ? (
+        <p className="text-[13px] text-fg-tertiary">Loading approvals…</p>
+      ) : rows.length === 0 ? (
+        <div className="rounded-xl border border-line-subtle bg-surface p-12 text-center">
+          <Icon name="check-circle" size={28} className="mx-auto text-fg-success" />
+          <p className="mt-3 text-[15px] font-medium">Nothing is waiting on you</p>
+          <p className="mt-1 text-[13px] text-fg-tertiary">New requests appear here the moment an employee books outside policy.</p>
+        </div>
+      ) : (
+        rows.map((row) => {
+          const mine = row.employeeId === me.data?.employeeId
+          const busy = decide.isPending && decide.variables.approval.approvalId === row.approvalId
+          const severe = row.policyReason.toLowerCase().includes('limit') && row.estimatedFareMinor >= 5_000_000
 
-            <Money minorUnits={row.fareMinor} currency={row.currency} className="text-[17px] font-medium" />
-          </div>
-
-          <div className="mt-4 flex justify-end gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                decide.mutate({ requestId: row.requestId, approve: false })
-              }}
+          return (
+            <article
+              key={row.approvalId}
+              className={cn(
+                'rounded-xl border bg-surface p-4 shadow-[var(--shadow-e1)]',
+                severe ? 'border-[color:var(--border-danger)]/60' : 'border-line-subtle',
+              )}
             >
-              Decline
-            </Button>
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <Avatar name={row.employeeName} size="lg" />
+                  <div>
+                    <p className="text-[16px] font-semibold leading-6">{row.employeeName}</p>
+                    <p className="text-[12px] text-fg-tertiary">
+                      {[row.costCentreCode, row.employeeEmail].filter((part) => part !== null && part.length > 0).join(' · ')}
+                    </p>
+                  </div>
+                </div>
+                <p className="inline-flex items-center gap-1.5 font-mono text-[12px] text-fg-tertiary tabular">
+                  <Icon name="clock" size={14} />
+                  waiting {formatWaiting(row.requestedAt)}
+                </p>
+              </div>
 
-            <Button
-              size="sm"
-              onClick={() => {
-                decide.mutate({ requestId: row.requestId, approve: true })
-              }}
-            >
-              Approve
-            </Button>
-          </div>
-        </article>
-      ))}
+              <div className="mt-4 grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-fg-tertiary">Route</p>
+                  <p className="mt-1 text-[15px]">
+                    {row.pickupLabel} <span className="text-fg-tertiary">→</span> {row.dropoffLabel}
+                  </p>
+                </div>
+                <div className="sm:text-right">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-fg-tertiary">Requested</p>
+                  <p className="mt-1 text-[15px]">{formatWhen(row.requestedAt)} · expires {formatUntil(row.expiresAt)}</p>
+                </div>
+                <div className="sm:text-right">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-fg-tertiary">Fare</p>
+                  <Money minorUnits={row.estimatedFareMinor} currency={row.currency} className="mt-1 block text-[15px] font-semibold" />
+                </div>
+              </div>
 
-      {decide.error !== null ? (
-        <p role="alert" className="rounded-md bg-danger-subtle px-4 py-3 text-[13px] text-fg-danger">
-          {decide.error instanceof ApiError && decide.error.status === 409
-            ? 'Someone else has already decided that request.'
-            : 'The decision could not be recorded. Please try again.'}
-        </p>
-      ) : null}
+              <div className={cn('mt-4 flex items-start gap-3 rounded-lg px-4 py-3', severe ? 'bg-danger-subtle text-fg-danger' : 'bg-warning-subtle text-fg-warning')}>
+                <Icon name="warning" size={18} className="mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-[14px] font-semibold">{row.policyReason}</p>
+                  {row.decisionNote !== null && <p className="text-[12px] opacity-90">“{row.decisionNote}”</p>}
+                </div>
+              </div>
+
+              <div className="mt-4 flex items-center gap-3">
+                {mine && <Badge tone="danger">Your own request</Badge>}
+                {severe && <Badge tone="danger">Over ₦50,000</Badge>}
+                <div className="ml-auto flex gap-2">
+                  <Button variant="secondary" disabled={mine || busy} onClick={() => { setDeclining(row); }}>
+                    Decline
+                  </Button>
+                  <Button loading={busy} disabled={mine} onClick={() => { decide.mutate({ approval: row, approve: true, note: null }) }}>
+                    Approve
+                  </Button>
+                </div>
+              </div>
+            </article>
+          )
+        })
+      )}
+
+      <DeclineDialog
+        approval={declining}
+        loading={decide.isPending}
+        onClose={() => { setDeclining(null); }}
+        onDecline={(note) => {
+          if (declining !== null) {
+            decide.mutate({ approval: declining, approve: false, note })
+            setDeclining(null)
+          }
+        }}
+      />
     </div>
+  )
+}
+
+/** Declining asks for a word of explanation: the employee reads it on their phone. */
+function DeclineDialog({
+  approval,
+  loading,
+  onClose,
+  onDecline,
+}: {
+  readonly approval: Approval | null
+  readonly loading: boolean
+  readonly onClose: () => void
+  readonly onDecline: (note: string | null) => void
+}) {
+  const [note, setNote] = useState('')
+
+  return (
+    <Dialog
+      open={approval !== null}
+      onClose={() => { setNote(''); onClose() }}
+      title="Decline this ride?"
+      subtitle={approval === null ? undefined : `${approval.employeeName} will be told straight away. Nothing is charged and no driver is dispatched.`}
+    >
+      <Field label="Reason (optional)" htmlFor="decline-note" hint="Shown to the employee, e.g. “Use Orbit Comfort instead” or “Book after 19:00”.">
+        <textarea
+          id="decline-note"
+          value={note}
+          rows={3}
+          maxLength={500}
+          onChange={(event) => { setNote(event.target.value); }}
+          className="w-full rounded-md border border-line bg-surface px-3 py-2 text-[15px] text-fg focus:border-line-focus focus:outline-none focus:ring-2 focus:ring-[color:var(--border-focus)]/30"
+        />
+      </Field>
+      <div className="flex items-center gap-3 pt-2">
+        <Button variant="ghost" onClick={() => { setNote(''); onClose() }}>Cancel</Button>
+        <Button variant="danger" loading={loading} onClick={() => { onDecline(note.trim() === '' ? null : note.trim()); setNote('') }}>
+          Decline ride
+        </Button>
+      </div>
+    </Dialog>
   )
 }

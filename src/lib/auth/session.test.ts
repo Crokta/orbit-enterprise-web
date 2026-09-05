@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { clearSession, getAccessToken, isSessionValid, refreshAccessToken, setSession } from './session'
+import { clearSession, deviceFingerprint, getAccessToken, isSessionValid, refreshAccessToken, setSession } from './session'
 
 describe('session', () => {
   beforeEach(() => {
@@ -37,8 +37,13 @@ describe('session', () => {
   })
 
   it('collapses concurrent refreshes into one request', async () => {
+    setSession('tok_old', 900, { refreshToken: 'rt_1', familyId: 'fam_1' })
+
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ accessToken: 'tok_new', expiresIn: 900 }), { status: 200 }),
+      new Response(
+        JSON.stringify({ accessToken: 'tok_new', refreshToken: 'rt_2', familyId: 'fam_1', expiresInSeconds: 900 }),
+        { status: 200 },
+      ),
     )
     vi.stubGlobal('fetch', fetchMock)
 
@@ -49,10 +54,32 @@ describe('session', () => {
     // Three refreshes would rotate the token family three times, which the identity
     // service correctly reads as reuse and answers by revoking the whole family.
     expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(getAccessToken()).toBe('tok_new')
+
+    // The rotated refresh token replaces the spent one, bound to this browser.
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse(init.body as string) as Record<string, string>
+    expect(body['refreshToken']).toBe('rt_1')
+    expect(body['familyId']).toBe('fam_1')
+    expect(body['deviceFingerprint']).toBe(deviceFingerprint())
+    expect(sessionStorage.getItem('orbit-refresh')).toContain('rt_2')
+  })
+
+  it('does not call the network when there is nothing to trade in', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    expect(await refreshAccessToken()).toBe(false)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps the same device fingerprint across calls', () => {
+    expect(deviceFingerprint()).toBe(deviceFingerprint())
+    expect(deviceFingerprint()).toMatch(/^web-/)
   })
 
   it('clears the session when the refresh is rejected', async () => {
-    setSession('tok_old', 900)
+    setSession('tok_old', 900, { refreshToken: 'rt_1', familyId: 'fam_1' })
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 401 })))
 
     expect(await refreshAccessToken()).toBe(false)
@@ -60,7 +87,7 @@ describe('session', () => {
   })
 
   it('clears the session when the network fails', async () => {
-    setSession('tok_old', 900)
+    setSession('tok_old', 900, { refreshToken: 'rt_1', familyId: 'fam_1' })
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('offline')))
 
     expect(await refreshAccessToken()).toBe(false)

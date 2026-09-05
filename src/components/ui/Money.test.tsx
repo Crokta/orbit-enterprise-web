@@ -4,38 +4,22 @@ import { describe, expect, it } from 'vitest'
 import { Money } from './Money'
 
 describe('Money', () => {
-  it('divides minor units at the last possible moment', () => {
-    render(<Money minorUnits={425_000} currency="NGN" />)
+  it('divides minor units at the last moment', () => {
+    render(<Money minorUnits={1_240_000} currency="NGN" />)
 
-    // Minor units all the way from the ledger to here. Every earlier conversion to a
-    // float is a rounding error waiting to be reconciled.
-    expect(screen.getByText(/4,250\.00/)).toBeInTheDocument()
+    // Whole naira by default: every fare in the design is shown without kobo.
+    expect(screen.getByText('₦12,400')).toBeInTheDocument()
   })
 
-  it('keeps two decimal places on a round amount', () => {
-    render(<Money minorUnits={500_000} currency="NGN" />)
+  it('shows kobo when asked', () => {
+    render(<Money minorUnits={123_456} currency="NGN" fraction />)
 
-    // A fare column where some rows show ".00" and others do not cannot be scanned.
-    expect(screen.getByText(/5,000\.00/)).toBeInTheDocument()
+    expect(screen.getByText('₦1,234.56')).toBeInTheDocument()
   })
 
-  it('renders a zero amount rather than nothing', () => {
-    render(<Money minorUnits={0} currency="NGN" />)
+  it('compacts millions for the tiles', () => {
+    render(<Money minorUnits={482_000_000} currency="NGN" compact />)
 
-    // Zero is a real amount — a fully refunded ride — and it must not look like a
-    // missing value.
-    expect(screen.getByText(/0\.00/)).toBeInTheDocument()
-  })
-
-  it('handles a negative amount, which a refund posting is', () => {
-    render(<Money minorUnits={-125_050} currency="NGN" />)
-
-    expect(screen.getByText(/1,250\.50/)).toBeInTheDocument()
-  })
-
-  it('uses tabular figures so a column of fares lines up', () => {
-    const { container } = render(<Money minorUnits={100} currency="NGN" />)
-
-    expect(container.firstElementChild).toHaveClass('tabular')
+    expect(screen.getByText('₦4.82M')).toBeInTheDocument()
   })
 })

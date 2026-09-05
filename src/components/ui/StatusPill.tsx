@@ -1,6 +1,6 @@
 import { cn } from './cn'
 
-/** The ride and driver states the console displays. */
+/** The ride, employee, invoice and approval states the console displays. */
 export type Status =
   | 'online'
   | 'offline'
@@ -10,14 +10,20 @@ export type Status =
   | 'pending'
   | 'approved'
   | 'rejected'
-
-  // The employee lifecycle. These were missing, so the employees table rendered a pill
-  // with no style and no label — a blank cell where the account's state should be. It
-  // type-checked because the page declared a union that did not describe what the service
-  // actually sends.
   | 'active'
   | 'invited'
   | 'suspended'
+  | 'completed'
+  | 'settling'
+  | 'paid'
+  | 'overdue'
+  | 'due'
+  | 'accruing'
+  | 'awaiting'
+  | 'declined'
+  | 'expired'
+  | 'withdrawn'
+  | 'voided'
 
 const STYLES: Record<Status, string> = {
   // Straight off the Figma status ramp. Colour is never the only signal — each pill
@@ -34,6 +40,17 @@ const STYLES: Record<Status, string> = {
   active: 'bg-success-subtle text-fg-success',
   invited: 'bg-warning-subtle text-fg-warning',
   suspended: 'bg-danger-subtle text-fg-danger',
+  completed: 'bg-success-subtle text-fg-success',
+  settling: 'bg-warning-subtle text-fg-warning',
+  paid: 'bg-success-subtle text-fg-success',
+  overdue: 'bg-danger-subtle text-fg-danger',
+  due: 'bg-subtle text-fg-secondary',
+  accruing: 'bg-subtle text-fg-secondary',
+  awaiting: 'bg-warning-subtle text-fg-warning',
+  declined: 'bg-danger-subtle text-fg-danger',
+  expired: 'bg-subtle text-fg-tertiary',
+  withdrawn: 'bg-subtle text-fg-tertiary',
+  voided: 'bg-subtle text-fg-tertiary',
 }
 
 const LABELS: Record<Status, string> = {
@@ -48,19 +65,39 @@ const LABELS: Record<Status, string> = {
   active: 'Active',
   invited: 'Invited',
   suspended: 'Suspended',
+  completed: 'Completed',
+  settling: 'Settling',
+  paid: 'Paid',
+  overdue: 'Overdue',
+  due: 'Due',
+  accruing: 'Accruing',
+  awaiting: 'Awaiting approval',
+  declined: 'Declined',
+  expired: 'Expired',
+  withdrawn: 'Withdrawn',
+  voided: 'Voided',
 }
 
-export function StatusPill({ status, className }: { readonly status: Status; readonly className?: string }) {
+export function StatusPill({
+  status,
+  label,
+  className,
+}: {
+  readonly status: Status
+  /** Overrides the default wording, e.g. "Declined — use Comfort". */
+  readonly label?: string | undefined
+  readonly className?: string
+}) {
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold',
+        'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap',
         STYLES[status],
         className,
       )}
     >
       <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
-      {LABELS[status]}
+      {label ?? LABELS[status]}
     </span>
   )
 }

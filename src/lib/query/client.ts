@@ -54,6 +54,10 @@ export function createQueryClient(): QueryClient {
  * screen that never refreshes, and nothing anywhere reports an error.
  */
 export const queryKeys = {
+  me: ['me'] as const,
+  dashboard: ['dashboard'] as const,
+  myTrips: ['my-trips'] as const,
+  apiKeys: ['api-keys'] as const,
   rides: {
     all: ['rides'] as const,
     list: (filters: Record<string, unknown>) => ['rides', 'list', filters] as const,
@@ -63,6 +67,7 @@ export const queryKeys = {
   approvals: {
     all: ['approvals'] as const,
     queue: () => ['approvals', 'queue'] as const,
+    detail: (approvalId: string) => ['approvals', 'detail', approvalId] as const,
   },
   employees: {
     all: ['employees'] as const,
@@ -74,6 +79,7 @@ export const queryKeys = {
   invoices: {
     all: ['invoices'] as const,
     list: (filters: Record<string, unknown>) => ['invoices', 'list', filters] as const,
+    statement: (invoiceId: string) => ['invoices', 'statement', invoiceId] as const,
   },
   drivers: {
     all: ['drivers'] as const,

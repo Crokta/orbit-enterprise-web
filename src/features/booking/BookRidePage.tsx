@@ -1,183 +1,201 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useMutation } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
+import { type SyntheticEvent, useState } from 'react'
 
+import { Badge } from '../../components/ui/Badge'
 import { Button } from '../../components/ui/Button'
+import { Card, DefinitionRow } from '../../components/ui/Card'
+import { Field, Segmented, Select, TextInput } from '../../components/ui/Inputs'
 import { Money } from '../../components/ui/Money'
-import { api, newIdempotencyKey } from '../../lib/api/client'
+import { PageHeader } from '../../components/ui/PageHeader'
+import { enterprise, vehicleLabel } from '../../lib/api/enterprise'
 import { ApiError } from '../../lib/api/problem'
-
-interface QuoteOption {
-  readonly vehicleClass: string
-  readonly label: string
-  readonly totalMinor: number
-  readonly currency: string
-  readonly etaMinutes: number
-  readonly surgeMultiplier: number
-  readonly quoteToken: string
-  readonly policy: PolicyVerdict
-}
-
-interface PolicyVerdict {
-  readonly allowed: boolean
-  readonly requiresApproval: boolean
-  readonly reason: string | null
-}
+import { formatCount, formatMoney, monthToDateLabel } from '../../lib/format'
+import { type Place, toE7 } from '../../lib/geocode'
+import { useMe } from '../session/useMe'
+import { PlaceSearch } from './PlaceSearch'
+import { type BookingDraft, loadDraft, saveDraft } from './draft'
 
 /**
- * Booking a ride against a corporate account.
+ * Book a ride.
  *
- * The quote and the policy check happen together, before anything is booked. Telling an
- * employee their ride is confirmed and then that it needs their manager's approval is
- * how a travel tool loses the trust of the people who have to use it daily.
+ * The trip, the billing and who it is for, then "See prices". The quote and the policy
+ * check happen together on the next screen, before anything is booked: telling an
+ * employee their ride is confirmed and then that it needs approval is how a travel tool
+ * loses the trust of the people who use it daily.
  */
 export function BookRidePage() {
-  const [pickup, setPickup] = useState('')
-  const [dropoff, setDropoff] = useState('')
-  const [costCentre, setCostCentre] = useState('')
-  const [selected, setSelected] = useState<QuoteOption | null>(null)
+  const me = useMe()
+  const navigate = useNavigate()
+  const previous = loadDraft()
 
-  const quotes = useQuery({
-    queryKey: ['quotes', pickup, dropoff, costCentre],
-    queryFn: () =>
-      api.post<readonly QuoteOption[]>('/v1/enterprise/quotes', {
-        json: { pickup, dropoff, costCentre },
-      }),
+  const [pickup, setPickup] = useState<Place | null>(previous?.pickup ?? null)
+  const [dropoff, setDropoff] = useState<Place | null>(previous?.dropoff ?? null)
+  const [date, setDate] = useState(previous?.date ?? new Date().toISOString().slice(0, 10))
+  const [time, setTime] = useState(previous?.time ?? nextQuarterHour())
+  const [costCentre, setCostCentre] = useState(previous?.costCentre ?? '')
+  const [projectCode, setProjectCode] = useState(previous?.projectCode ?? '')
+  const [reason, setReason] = useState(previous?.reason ?? '')
+  const [bookingFor, setBookingFor] = useState<BookingDraft['bookingFor']>(previous?.bookingFor ?? 'me')
+  const [passenger, setPassenger] = useState(previous?.passenger ?? '')
 
-    // Nothing is quoted until there is somewhere to go. Firing on every keystroke
-    // would put a pricing call behind each letter typed.
-    enabled: pickup.length > 3 && dropoff.length > 3,
-    staleTime: 0,
+  const policy = me.data?.policy ?? null
+  const effectiveCostCentre = costCentre || me.data?.costCentreCode || null
+
+  const quote = useMutation({
+    mutationFn: () => {
+      if (pickup === null || dropoff === null) {
+        throw new Error('Choose a pick-up and a destination')
+      }
+
+      return enterprise.booking.quote({
+        pickupLatE7: toE7(pickup.latitude),
+        pickupLonE7: toE7(pickup.longitude),
+        dropoffLatE7: toE7(dropoff.latitude),
+        dropoffLonE7: toE7(dropoff.longitude),
+        costCentre: effectiveCostCentre,
+      })
+    },
+    onSuccess: (options) => {
+      if (pickup === null || dropoff === null) {
+        return
+      }
+
+      saveDraft({ pickup, dropoff, date, time, costCentre: effectiveCostCentre, projectCode, reason, bookingFor, passenger, options })
+      void navigate({ to: '/book/choose' })
+    },
   })
 
-  const book = useMutation({
-    mutationFn: (option: QuoteOption) =>
-      api.post<{ rideId: string; status: string }>('/v1/enterprise/rides', {
-        json: { quoteToken: option.quoteToken, costCentre },
+  function submit(event: SyntheticEvent) {
+    event.preventDefault()
+    quote.mutate()
+  }
 
-        // One key per intent, generated when the user commits rather than on render.
-        // A key regenerated on re-render makes the retry a second ride.
-        idempotencyKey: newIdempotencyKey(),
-      }),
-  })
+  function saveAsDraft() {
+    if (pickup !== null && dropoff !== null) {
+      saveDraft({ pickup, dropoff, date, time, costCentre: effectiveCostCentre, projectCode, reason, bookingFor, passenger, options: [] })
+    }
+  }
+
+  const company = me.data?.company.name ?? 'your company'
+  const withinPolicy = me.data !== undefined && me.data.policyBreachesThisMonth === 0
 
   return (
-    <div className="max-w-3xl space-y-6">
-      <h1 className="text-[28px] font-semibold leading-[34px]">Book a ride</h1>
+    <div className="space-y-6">
+      <PageHeader title="Book a ride" subtitle={`Your rides are billed to ${company} under your cost centre`} />
 
-      <div className="space-y-4 rounded-lg border border-line-subtle bg-surface p-5">
-        <TextField label="Pick-up" value={pickup} onChange={setPickup} placeholder="Adeola Odeku St, Victoria Island" />
-        <TextField label="Drop-off" value={dropoff} onChange={setDropoff} placeholder="Murtala Muhammed Airport" />
-        <TextField label="Cost centre" value={costCentre} onChange={setCostCentre} placeholder="ENG-LAGOS" />
-      </div>
+      <form onSubmit={submit} className="grid gap-4 xl:grid-cols-[minmax(0,5fr)_minmax(0,4fr)]">
+        <div className="space-y-4">
+          <Card title="Trip">
+            <div className="space-y-4">
+              <Field label="Pick-up" htmlFor="pickup" hint={pickup?.address}>
+                <PlaceSearch id="pickup" value={pickup} onChange={setPickup} placeholder="12 Adeola Odeku St, Victoria Island" />
+              </Field>
+              <Field label="Destination" htmlFor="dropoff" hint={dropoff?.address}>
+                <PlaceSearch id="dropoff" value={dropoff} onChange={setDropoff} placeholder="Ikeja GRA, Lagos" />
+              </Field>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Date" htmlFor="date">
+                  <TextInput id="date" type="date" value={date} min={new Date().toISOString().slice(0, 10)} onChange={(event) => { setDate(event.target.value); }} />
+                </Field>
+                <Field label="Time" htmlFor="time">
+                  <TextInput id="time" type="time" value={time} onChange={(event) => { setTime(event.target.value); }} />
+                </Field>
+              </div>
+              <Field
+                label="Ride type"
+                hint={policy === null || policy.allowedClasses.length === 0 ? 'Every tier is allowed on your account' : `${policy.allowedClasses.map(vehicleLabel).join(' and ')} allowed; other tiers need approval or are unavailable`}
+              >
+                <div className="flex h-10 items-center rounded-md border border-line bg-surface-sunken px-3 text-[15px] text-fg-secondary">
+                  Choose on the next screen
+                </div>
+              </Field>
+            </div>
+          </Card>
 
-      {quotes.isPending && quotes.fetchStatus === 'fetching' ? (
-        <p className="text-[13px] text-fg-secondary">Getting prices…</p>
-      ) : null}
+          <Card title="Billing" subtitle={policy?.requiresCostCentre === true ? 'Required by your travel policy' : 'Optional on your account'}>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Cost centre" htmlFor="cc">
+                <Select id="cc" value={costCentre} onChange={(event) => { setCostCentre(event.target.value); }}>
+                  <option value="">{me.data?.costCentreCode === null || me.data === undefined ? 'None' : `${me.data.costCentreName ?? me.data.costCentreCode} · ${me.data.costCentreCode} (yours)`}</option>
+                </Select>
+              </Field>
+              <Field label="Project code" htmlFor="project">
+                <TextInput id="project" value={projectCode} placeholder="PRJ-4471 — Payments migration" onChange={(event) => { setProjectCode(event.target.value); }} />
+              </Field>
+            </div>
+            <Field label="Reason for travel" htmlFor="reason" hint="Visible to your approver and finance" className="mt-4">
+              <TextInput id="reason" value={reason} placeholder="Client integration workshop at Ikeja office" onChange={(event) => { setReason(event.target.value); }} />
+            </Field>
+          </Card>
 
-      {quotes.data?.map((option) => (
-        <button
-          key={option.vehicleClass}
-          type="button"
-          onClick={() => { setSelected(option); }}
-          // A ride the policy forbids is not selectable at all, rather than selectable
-          // and then rejected on submit. The reason is shown alongside it, because
-          // "not allowed" with no explanation generates a support ticket every time.
-          disabled={!option.policy.allowed}
-          className={`flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors ${
-            selected?.vehicleClass === option.vehicleClass
-              ? 'border-line-brand bg-brand-subtle'
-              : 'border-line-subtle bg-surface hover:bg-hover'
-          } disabled:cursor-not-allowed disabled:opacity-60`}
-        >
-          <div>
-            <p className="text-[15px] font-medium">{option.label}</p>
-            <p className="text-[13px] text-fg-secondary">{option.etaMinutes} min away</p>
+          <Card title="Booking for" subtitle={me.data?.canBookForVisitors === true ? 'You can book on behalf of a colleague or a visitor' : 'Booking for visitors is not enabled on your account'}>
+            <Segmented<BookingDraft['bookingFor']>
+              label="Booking for"
+              value={bookingFor}
+              onChange={setBookingFor}
+              options={[
+                { value: 'me', label: 'Myself' },
+                { value: 'colleague', label: 'A colleague' },
+                { value: 'visitor', label: 'A visitor', disabled: me.data?.canBookForVisitors !== true },
+              ]}
+            />
+            {bookingFor !== 'me' && (
+              <Field label={bookingFor === 'colleague' ? 'Colleague' : 'Visitor'} htmlFor="passenger" hint="Their name is shown to the driver" className="mt-4">
+                <TextInput id="passenger" required value={passenger} onChange={(event) => { setPassenger(event.target.value); }} />
+              </Field>
+            )}
+          </Card>
 
-            {option.policy.reason !== null ? (
-              <p className={`mt-1 text-[13px] ${option.policy.allowed ? 'text-fg-warning' : 'text-fg-danger'}`}>
-                {option.policy.reason}
-              </p>
-            ) : null}
+          {quote.error !== null && (
+            <p role="alert" className="rounded-md bg-danger-subtle px-4 py-3 text-[13px] text-fg-danger">
+              {quote.error instanceof ApiError
+                ? quote.error.code === 'employee.cannot_book'
+                  ? 'Your account cannot book on the company account. Ask your travel admin.'
+                  : quote.error.message
+                : quote.error.message}
+            </p>
+          )}
+
+          <div className="flex justify-end gap-3">
+            <Button type="button" variant="ghost" onClick={saveAsDraft} disabled={pickup === null || dropoff === null}>Save as draft</Button>
+            <Button type="submit" loading={quote.isPending} disabled={pickup === null || dropoff === null}>See prices</Button>
           </div>
-
-          <div className="text-right">
-            <Money minorUnits={option.totalMinor} currency={option.currency} className="text-[17px] font-medium" />
-
-            {option.surgeMultiplier > 1 ? (
-              // Surge is disclosed before booking, never after. A fare that is higher
-              // than quoted with no warning is the single most complained-about thing
-              // in ride hailing (§9.3).
-              <p className="text-[11px] font-semibold text-fg-surge">
-                {option.surgeMultiplier.toFixed(1)}× surge
-              </p>
-            ) : null}
-          </div>
-        </button>
-      ))}
-
-      {selected !== null ? (
-        <div className="flex items-center justify-between rounded-lg border border-line-subtle bg-surface p-4">
-          <p className="text-[13px] text-fg-secondary">
-            {selected.policy.requiresApproval
-              ? 'This trip is outside policy and will be sent to your manager for approval.'
-              : 'This trip is within policy and will be booked immediately.'}
-          </p>
-
-          <Button
-            loading={book.isPending}
-            onClick={() => {
-              book.mutate(selected)
-            }}
-          >
-            {selected.policy.requiresApproval ? 'Request approval' : 'Book ride'}
-          </Button>
         </div>
-      ) : null}
 
-      {book.error !== null ? (
-        <p role="alert" className="rounded-md bg-danger-subtle px-4 py-3 text-[13px] text-fg-danger">
-          {book.error instanceof ApiError && book.error.code === 'pricing.quote_expired'
-            ? 'That price is no longer current. Please check the fare again.'
-            : 'The ride could not be booked. Nothing has been charged.'}
-        </p>
-      ) : null}
+        <div className="space-y-4">
+          <Card title="Your policy" subtitle={policy === null ? 'No policy applies — every ride books immediately' : `${policy.name} — applies to ${formatCount(policy.activeEmployees)} employees`}>
+            {policy !== null && (
+              <dl>
+                <DefinitionRow label="Per-ride cap" value={policy.approvalThresholdMinor === null ? 'None' : formatMoney(policy.approvalThresholdMinor, policy.currency)} />
+                <DefinitionRow label="Hard limit" value={policy.hardCapMinor === null ? 'None' : formatMoney(policy.hardCapMinor, policy.currency)} />
+                <DefinitionRow label="Allowed hours" value={policy.permittedFrom === null ? 'Any time' : `${policy.permittedFrom} – ${policy.permittedTo ?? ''}`} />
+                <DefinitionRow label="Ride tiers" value={policy.allowedClasses.length === 0 ? 'All' : policy.allowedClasses.map((tier) => vehicleLabel(tier).replace('Orbit ', '')).join(' and ')} />
+                <DefinitionRow label="Cost centre" value={policy.requiresCostCentre ? 'Required' : 'Optional'} tone={policy.requiresCostCentre ? 'warning' : 'neutral'} />
+                <DefinitionRow label="Surge pricing" value={policy.requiresApprovalForSurge ? 'Needs approval' : 'Allowed'} tone={policy.requiresApprovalForSurge ? 'warning' : 'success'} />
+              </dl>
+            )}
+          </Card>
 
-      {book.data !== undefined ? (
-        <p role="status" className="rounded-md bg-success-subtle px-4 py-3 text-[13px] text-fg-success">
-          {book.data.status === 'AwaitingApproval'
-            ? 'Sent to your manager. You will be notified when it is decided.'
-            : 'Booked. Your driver is being found now.'}
-        </p>
-      ) : null}
+          <Card title="Your spend" subtitle={monthToDateLabel()}>
+            <div className="flex items-end justify-between gap-4">
+              <div>
+                <Money minorUnits={me.data?.spendThisMonthMinor ?? 0} currency={me.data?.currency ?? 'NGN'} className="text-[28px] font-semibold leading-[34px]" />
+                <p className="mt-1 text-[12px] text-fg-tertiary">
+                  {formatCount(me.data?.tripsThisMonth ?? 0)} rides · {me.data === undefined ? '' : me.data.policyBreachesThisMonth === 0 ? 'no policy breaches' : `${formatCount(me.data.policyBreachesThisMonth)} needed approval`}
+                </p>
+              </div>
+              <Badge tone={withinPolicy ? 'success' : 'warning'}>{withinPolicy ? 'Within policy' : 'Approvals needed'}</Badge>
+            </div>
+          </Card>
+        </div>
+      </form>
     </div>
   )
 }
 
-function TextField({
-  label,
-  value,
-  onChange,
-  placeholder,
-}: {
-  readonly label: string
-  readonly value: string
-  readonly onChange: (value: string) => void
-  readonly placeholder: string
-}) {
-  const id = label.toLowerCase().replace(/\W+/g, '-')
-
-  return (
-    <div className="space-y-1.5">
-      <label htmlFor={id} className="block text-[13px] font-medium text-fg-secondary">
-        {label}
-      </label>
-      <input
-        id={id}
-        value={value}
-        placeholder={placeholder}
-        onChange={(event) => { onChange(event.target.value); }}
-        className="h-10 w-full rounded-md border border-line bg-surface px-3 text-[15px]"
-      />
-    </div>
-  )
+function nextQuarterHour(): string {
+  const now = new Date(Date.now() + 15 * 60_000)
+  now.setMinutes(Math.ceil(now.getMinutes() / 15) * 15, 0, 0)
+  return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
 }

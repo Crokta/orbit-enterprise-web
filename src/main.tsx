@@ -4,6 +4,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import './design/theme.css'
+import { ToastProvider } from './components/ui/Toast'
 import { createQueryClient } from './lib/query/client'
 import { routeTree } from './app/routeTree'
 
@@ -36,7 +37,9 @@ if (container === null) {
 createRoot(container).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+      <ToastProvider>
+        <RouterProvider router={router} />
+      </ToastProvider>
     </QueryClientProvider>
   </StrictMode>,
 )

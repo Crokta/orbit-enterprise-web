@@ -1,33 +1,25 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import {
-  type ColumnDef,
-  flexRender,
-  getCoreRowModel,
-  useReactTable,
-} from '@tanstack/react-table'
+import { useNavigate } from '@tanstack/react-router'
 import { useMemo, useState } from 'react'
 
+import { Badge } from '../../components/ui/Badge'
+import { Button } from '../../components/ui/Button'
+import { ChipGroup } from '../../components/ui/Chip'
+import { SearchInput } from '../../components/ui/Inputs'
+import { LoadError } from '../../components/ui/LoadError'
 import { Money } from '../../components/ui/Money'
-import { StatusPill, type Status } from '../../components/ui/StatusPill'
-import { api } from '../../lib/api/client'
+import { PageHeader } from '../../components/ui/PageHeader'
+import { StatusPill } from '../../components/ui/StatusPill'
+import { Route, Table, TwoLine } from '../../components/ui/Table'
+import { useToast } from '../../components/ui/Toast'
+import { enterprise, type Trip } from '../../lib/api/enterprise'
+import { downloadCsv } from '../../lib/csv'
+import { formatCount, formatMoney, formatPeriod, formatShortDate, formatTime, humanise } from '../../lib/format'
 import { queryKeys } from '../../lib/query/client'
+import { useSearchParam } from '../../lib/router'
+import { useMe } from '../session/useMe'
 
-interface TripRow {
-  readonly rideId: string
-  readonly employeeId: string
-  readonly costCentre: string
-  readonly pickupLabel: string
-  readonly dropoffLabel: string
-  readonly fareMinor: number
-  readonly currency: string
-  readonly completedAt: string | null
-  readonly policyBreach: string | null
-}
-
-interface Page<T> {
-  readonly items: readonly T[]
-  readonly nextCursor: string | null
-}
+type Filter = 'all' | 'breaches' | 'pending' | 'cancelled'
 
 /**
  * Every corporate trip, paged.
@@ -37,172 +29,263 @@ interface Page<T> {
  * user sees a row twice while another disappears entirely.
  */
 export function TripLogPage() {
+  const me = useMe()
+  const navigate = useNavigate()
+  const toast = useToast()
+  const initialQuery = useSearchParam('q')
+
+  const [query, setQuery] = useState(initialQuery)
+  const [filter, setFilter] = useState<Filter>('all')
   const [cursor, setCursor] = useState<string | undefined>(undefined)
   const [history, setHistory] = useState<string[]>([])
+  const [downloading, setDownloading] = useState(false)
 
-  const { data, isPending } = useQuery({
+  const page = useQuery({
     queryKey: queryKeys.rides.list({ cursor }),
-    queryFn: () => api.get<Page<TripRow>>('/v1/enterprise/trips', { query: { cursor, limit: 50 } }),
+    queryFn: () => enterprise.trips.page(cursor, 50),
 
     // Keeps the previous page on screen while the next one loads. Without it the table
     // collapses to empty on every page turn, and the layout jumps.
     placeholderData: keepPreviousData,
   })
 
-  const columns = useMemo<ColumnDef<TripRow>[]>(
-    () => [
-      {
-        accessorKey: 'rideId',
-        header: 'Ride',
-        cell: (info) => <span className="tabular text-[13px]">{info.getValue<string>()}</span>,
-      },
-      { accessorKey: 'employeeId', header: 'Employee' },
-      { accessorKey: 'costCentre', header: 'Cost centre' },
-      {
-        id: 'route',
-        header: 'Route',
-        cell: ({ row }) => (
-          <span className="text-[13px] text-fg-secondary">
-            {row.original.pickupLabel} → {row.original.dropoffLabel}
-          </span>
-        ),
-      },
-      {
-        accessorKey: 'fareMinor',
-        header: () => <span className="block text-right">Fare</span>,
-        cell: ({ row }) => (
-          // Right-aligned, because a column of money is read by comparing magnitudes and
-          // that only works when the decimal points line up.
-          <span className="block text-right">
-            <Money minorUnits={row.original.fareMinor} currency={row.original.currency} />
-          </span>
-        ),
-      },
-      {
-        accessorKey: 'state',
-        header: 'Status',
-        cell: (info) => <StatusPill status={toStatus(info.getValue<string>())} />,
-      },
-      {
-        accessorKey: 'policyBreach',
-        header: 'Policy',
-        cell: (info) => {
-          const breach = info.getValue<string | null>()
-
-          return breach === null ? (
-            <span className="text-[13px] text-fg-tertiary">Within policy</span>
-          ) : (
-            <span className="text-[13px] text-fg-warning">{breach}</span>
-          )
-        },
-      },
-    ],
-    [],
-  )
-
-  const table = useReactTable({
-    data: data?.items as TripRow[] | undefined ?? [],
-    columns,
-    getCoreRowModel: getCoreRowModel(),
+  const approvals = useQuery({
+    queryKey: queryKeys.approvals.queue(),
+    queryFn: enterprise.approvals.queue,
+    enabled: me.data?.isApprover === true,
   })
 
+  const rows = useMemo(() => {
+    const items = page.data?.items ?? []
+    const needle = query.trim().toLowerCase()
+
+    return items.filter((trip) => {
+      if (filter === 'breaches' && trip.policyBreach === null) {
+        return false
+      }
+
+      if (filter === 'pending' || filter === 'cancelled') {
+        // Completed trips are neither; those filters point at the approval queue below.
+        return false
+      }
+
+      if (needle.length === 0) {
+        return true
+      }
+
+      return [trip.rideId, trip.employeeName, trip.employeeEmail, trip.pickupLabel, trip.dropoffLabel, trip.costCentre ?? '']
+        .join(' ')
+        .toLowerCase()
+        .includes(needle)
+    })
+  }, [page.data, query, filter])
+
+  const breaches = (page.data?.items ?? []).filter((trip) => trip.policyBreach !== null).length
+  const now = new Date()
+  const period = formatPeriod(`${String(now.getFullYear())}-${String(now.getMonth() + 1).padStart(2, '0')}`, now)
+
+  function exportRows(trips: readonly Trip[], filename: string) {
+    downloadCsv(
+      filename,
+      ['Ride', 'Completed', 'Employee', 'Email', 'Pick-up', 'Destination', 'Cost centre', 'Policy', 'Fare', 'Currency'],
+      trips.map((trip) => [
+        trip.rideId,
+        trip.completedAt,
+        trip.employeeName,
+        trip.employeeEmail,
+        trip.pickupLabel,
+        trip.dropoffLabel,
+        trip.costCentre,
+        trip.policyBreach === null ? 'OK' : humanise(trip.policyBreach),
+        formatMoney(trip.fareMinor, trip.currency, { fraction: true }),
+        trip.currency,
+      ]),
+    )
+  }
+
+  /** Walks every page and exports the whole log. */
+  async function downloadReport() {
+    setDownloading(true)
+
+    try {
+      const all: Trip[] = []
+      let next: string | undefined = undefined
+
+      // Capped at 40 pages — two thousand trips — so a runaway cursor cannot loop forever.
+      for (let i = 0; i < 40; i += 1) {
+        const result = await enterprise.trips.page(next, 50)
+        all.push(...result.items)
+
+        if (result.nextCursor === null) {
+          break
+        }
+
+        next = result.nextCursor
+      }
+
+      exportRows(all, `orbit-trip-report-${now.toISOString().slice(0, 10)}.csv`)
+      toast.notify(`Report ready · ${formatCount(all.length)} rides`)
+    } catch {
+      toast.notify('The report could not be built. Please try again.', 'danger')
+    } finally {
+      setDownloading(false)
+    }
+  }
+
   return (
-    <div className="space-y-4">
-      <h1 className="text-[28px] font-semibold leading-[34px]">Trip log</h1>
+    <div className="space-y-5">
+      <PageHeader
+        title="Trip log"
+        subtitle={
+          page.data === undefined
+            ? undefined
+            : `${formatCount(page.data.items.length)}${page.data.nextCursor === null ? '' : '+'} rides · ${period} · ${formatCount(breaches)} policy breaches on this page`
+        }
+        actions={
+          <>
+            <Button variant="secondary" onClick={() => { exportRows(rows, `orbit-trips-${now.toISOString().slice(0, 10)}.csv`) }} disabled={rows.length === 0}>
+              Export
+            </Button>
+            <Button loading={downloading} onClick={() => { void downloadReport() }}>
+              Download report
+            </Button>
+          </>
+        }
+      />
 
-      {/* The table scrolls inside its own container. Letting the page scroll sideways
-          takes the sidebar off-screen with it. */}
-      <div className="overflow-x-auto rounded-lg border border-line-subtle bg-surface">
-        <table className="w-full min-w-[900px] border-collapse text-[13px]">
-          <thead>
-            {table.getHeaderGroups().map((group) => (
-              <tr key={group.id} className="border-b border-line-subtle">
-                {group.headers.map((header) => (
-                  <th
-                    key={header.id}
-                    scope="col"
-                    className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-fg-tertiary"
-                  >
-                    {flexRender(header.column.columnDef.header, header.getContext())}
-                  </th>
-                ))}
-              </tr>
-            ))}
-          </thead>
-
-          <tbody>
-            {isPending ? (
-              <tr>
-                <td colSpan={columns.length} className="px-4 py-8 text-center text-fg-tertiary">
-                  Loading trips…
-                </td>
-              </tr>
-            ) : table.getRowModel().rows.length === 0 ? (
-              <tr>
-                <td colSpan={columns.length} className="px-4 py-8 text-center text-fg-tertiary">
-                  No trips yet.
-                </td>
-              </tr>
-            ) : (
-              table.getRowModel().rows.map((row) => (
-                <tr key={row.id} className="border-b border-line-subtle last:border-0 hover:bg-hover">
-                  {row.getVisibleCells().map((cell) => (
-                    <td key={cell.id} className="px-4 py-3">
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </td>
-                  ))}
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+      <div className="flex flex-wrap items-center gap-4">
+        <SearchInput value={query} onChange={setQuery} placeholder="Search rider, route or ride ID" className="w-[320px]" />
+        <ChipGroup<Filter>
+          label="Filter trips"
+          value={filter}
+          onChange={setFilter}
+          options={[
+            { value: 'all', label: 'All rides' },
+            { value: 'breaches', label: 'Policy breaches', count: breaches },
+            { value: 'pending', label: 'Pending approval', count: approvals.data?.length },
+            { value: 'cancelled', label: 'Cancelled' },
+          ]}
+        />
       </div>
 
-      <div className="flex justify-end gap-2">
-        <button
-          type="button"
-          disabled={history.length === 0}
-          onClick={() => {
-            setCursor(history.at(-2))
-            setHistory((previous) => previous.slice(0, -1))
-          }}
-          className="rounded-md border border-line px-3 py-1.5 text-[13px] disabled:text-fg-disabled"
-        >
-          Previous
-        </button>
+      {page.isError ? (
+        <LoadError error={page.error} what="the trip log" onRetry={() => { void page.refetch() }} />
+      ) : filter === 'pending' ? (
+        <PendingApprovals rows={approvals.data ?? []} isPending={approvals.isPending && me.data?.isApprover === true} />
+      ) : filter === 'cancelled' ? (
+        <div className="rounded-xl border border-line-subtle bg-surface p-12 text-center text-[13px] text-fg-tertiary">
+          Cancelled rides are not billed and are not recorded in the trip log.
+        </div>
+      ) : (
+        <>
+          <Table<Trip>
+            minWidth={960}
+            columns={[
+              {
+                key: 'ride',
+                header: 'Ride',
+                render: (row) => (
+                  <TwoLine
+                    primary={<span className="font-mono text-[13px]">{row.rideId}</span>}
+                    secondary={`${formatShortDate(row.completedAt)} · ${formatTime(row.completedAt)}`}
+                    mono
+                  />
+                ),
+              },
+              { key: 'employee', header: 'Employee', render: (row) => <TwoLine primary={row.employeeName} secondary={row.employeeEmail} mono /> },
+              { key: 'route', header: 'Route', render: (row) => <Route from={row.pickupLabel} to={row.dropoffLabel} /> },
+              {
+                key: 'policy',
+                header: 'Policy',
+                render: (row) =>
+                  row.policyBreach === null ? (
+                    <Badge tone="success">OK</Badge>
+                  ) : (
+                    <div>
+                      <Badge tone="danger">Breach</Badge>
+                      <p className="mt-1 text-[11px] text-fg-tertiary">{humanise(row.policyBreach)}</p>
+                    </div>
+                  ),
+              },
+              { key: 'status', header: 'Status', render: () => <StatusPill status="completed" /> },
+              {
+                key: 'fare',
+                header: 'Fare',
+                align: 'right',
+                sorted: true,
+                render: (row) => <Money minorUnits={row.fareMinor} currency={row.currency} />,
+              },
+            ]}
+            rows={rows}
+            rowKey={(row) => row.rideId}
+            isPending={page.isPending}
+            emptyTitle={query.length > 0 ? 'No rides match that search' : 'No rides yet'}
+            emptyHint={query.length > 0 ? 'Try a ride ID, an employee name or part of an address.' : 'Completed corporate trips appear here as they happen.'}
+            rowActions={(row) => [
+              { label: 'Copy ride ID', onSelect: () => { void navigator.clipboard.writeText(row.rideId).then(() => { toast.notify('Ride ID copied') }) } },
+              { label: 'Export this ride', onSelect: () => { exportRows([row], `${row.rideId}.csv`) } },
+              { label: 'See employee', onSelect: () => { void navigate({ to: '/employees', search: { q: row.employeeEmail } }) } },
+            ]}
+          />
 
-        <button
-          type="button"
-          disabled={data?.nextCursor == null}
-          onClick={() => {
-            const next = data?.nextCursor
-            if (next != null) {
-              setHistory((previous) => [...previous, next])
-              setCursor(next)
-            }
-          }}
-          className="rounded-md border border-line px-3 py-1.5 text-[13px] disabled:text-fg-disabled"
-        >
-          Next
-        </button>
-      </div>
+          <div className="flex items-center justify-between text-[13px] text-fg-tertiary">
+            <span>{history.length === 0 ? 'Newest first' : `Page ${String(history.length + 1)}`}</span>
+            <div className="flex gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={history.length === 0}
+                onClick={() => {
+                  setCursor(history.at(-2))
+                  setHistory((previous) => previous.slice(0, -1))
+                }}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={page.data?.nextCursor == null}
+                onClick={() => {
+                  const next = page.data?.nextCursor
+                  if (next != null) {
+                    setHistory((previous) => [...previous, next])
+                    setCursor(next)
+                  }
+                }}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }
 
-/** Maps a ride state onto the status ramp, defaulting to something neutral. */
-function toStatus(state: string): Status {
-  switch (state) {
-    case 'InTrip':
-      return 'in-trip'
-    case 'Cancelled':
-    case 'Expired':
-      return 'cancelled'
-    case 'Completed':
-      return 'approved'
-    default:
-      // An unrecognised state is a newer backend talking to an older console. Showing
-      // it as offline is better than crashing the table on an index that is not there.
-      return 'offline'
-  }
+function PendingApprovals({
+  rows,
+  isPending,
+}: {
+  readonly rows: readonly { readonly approvalId: string; readonly employeeName: string; readonly employeeEmail: string; readonly pickupLabel: string; readonly dropoffLabel: string; readonly policyReason: string; readonly estimatedFareMinor: number; readonly currency: string }[]
+  readonly isPending: boolean
+}) {
+  return (
+    <Table
+      columns={[
+        { key: 'id', header: 'Request', render: (row) => <span className="font-mono text-[13px]">{row.approvalId}</span> },
+        { key: 'employee', header: 'Employee', render: (row) => <TwoLine primary={row.employeeName} secondary={row.employeeEmail} mono /> },
+        { key: 'route', header: 'Route', render: (row) => <Route from={row.pickupLabel} to={row.dropoffLabel} /> },
+        { key: 'policy', header: 'Policy', render: (row) => <div><Badge tone="warning">Needs approval</Badge><p className="mt-1 text-[11px] text-fg-tertiary">{row.policyReason}</p></div> },
+        { key: 'status', header: 'Status', render: () => <StatusPill status="awaiting" /> },
+        { key: 'fare', header: 'Fare', align: 'right', render: (row) => <Money minorUnits={row.estimatedFareMinor} currency={row.currency} /> },
+      ]}
+      rows={rows}
+      rowKey={(row) => row.approvalId}
+      isPending={isPending}
+      emptyTitle="Nothing is waiting for approval"
+      emptyHint="Requests appear here while an approver decides."
+    />
+  )
 }
