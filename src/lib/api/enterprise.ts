@@ -322,6 +322,10 @@ export const enterprise = {
         readonly estimatedFareMinor: number
         readonly currency: string
         readonly surgeMultiplier: number
+        readonly pickupLatE7: number
+        readonly pickupLonE7: number
+        readonly dropoffLatE7: number
+        readonly dropoffLonE7: number
         readonly pickupLabel: string
         readonly dropoffLabel: string
         readonly costCentre: string | null

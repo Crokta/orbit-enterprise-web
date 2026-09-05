@@ -14,6 +14,7 @@ import { type QuoteOption, enterprise } from '../../lib/api/enterprise'
 import { newIdempotencyKey } from '../../lib/api/client'
 import { ApiError } from '../../lib/api/problem'
 import { formatMoney } from '../../lib/format'
+import { toE7 } from '../../lib/geocode'
 import { queryKeys } from '../../lib/query/client'
 import { useMe } from '../session/useMe'
 import { clearDraft, loadDraft } from './draft'
@@ -57,6 +58,10 @@ export function ChooseRidePage() {
           estimatedFareMinor: option.totalMinor,
           currency: option.currency,
           surgeMultiplier: option.surgeMultiplier,
+          pickupLatE7: toE7(draft.pickup.latitude),
+          pickupLonE7: toE7(draft.pickup.longitude),
+          dropoffLatE7: toE7(draft.dropoff.latitude),
+          dropoffLonE7: toE7(draft.dropoff.longitude),
           pickupLabel: draft.pickup.name,
           dropoffLabel: draft.dropoff.name,
           costCentre: draft.costCentre,
