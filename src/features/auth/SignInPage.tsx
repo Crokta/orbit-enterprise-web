@@ -32,8 +32,11 @@ interface TokenPair {
 export function SignInPage() {
   const navigate = useNavigate()
 
+  const [step, setStep] = useState<'credentials' | 'change'>('credentials')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
 
   const signIn = useMutation({
     mutationFn: (): Promise<TokenPair> =>
@@ -41,8 +44,23 @@ export function SignInPage() {
       api.post<TokenPair>('/v1/auth/password', { json: { email, password, deviceFingerprint: deviceFingerprint() } }),
     onSuccess: (result) => {
       setSession(result.accessToken, result.expiresInSeconds, { refreshToken: result.refreshToken, familyId: result.familyId })
+
+      // The password from the invitation email gets one destination: the change screen.
+      // Letting an administrator postpone it is how a temporary password emailed in
+      // plaintext becomes the permanent credential on a company's account.
+      if (result.mustChangePassword === true) {
+        setStep('change')
+        return
+      }
+
       goBackToWhereTheyWere()
     },
+  })
+
+  const changePassword = useMutation({
+    mutationFn: () =>
+      api.post('/v1/account/credentials', { json: { currentPassword: password, newPassword } }),
+    onSuccess: goBackToWhereTheyWere,
   })
 
   /**
@@ -63,10 +81,26 @@ export function SignInPage() {
 
   function onSubmit(event: SyntheticEvent) {
     event.preventDefault()
-    signIn.mutate()
+
+    if (step === 'credentials') {
+      signIn.mutate()
+      return
+    }
+
+    changePassword.mutate()
   }
 
   const locked = signIn.error instanceof ApiError && signIn.error.code === 'auth.credentials_locked'
+
+  const active = step === 'credentials' ? signIn : changePassword
+
+  // Identity's own floor is twelve characters; saying so here beats a round trip that
+  // comes back with a rule the person could have been told before they typed.
+  const mismatch = newPassword.length > 0 && confirmPassword.length > 0 && newPassword !== confirmPassword
+  const tooShort = newPassword.length > 0 && newPassword.length < 12
+
+  const blocked =
+    step === 'change' && (mismatch || tooShort || newPassword.length === 0 || confirmPassword.length === 0)
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
@@ -83,34 +117,63 @@ export function SignInPage() {
           <LockedCard email={email} onRetry={() => { signIn.reset(); }} />
         ) : (
           <form onSubmit={onSubmit} className="mt-6 space-y-5">
-            <div>
-              <h1 className="text-[28px] font-semibold leading-[34px] tracking-[-0.01em]">Sign in</h1>
-              <p className="mt-2 text-[14px] text-fg-secondary">Use the work address your administrator invited.</p>
-            </div>
+            {step === 'credentials' ? (
+              <>
+                <div>
+                  <h1 className="text-[28px] font-semibold leading-[34px] tracking-[-0.01em]">Sign in</h1>
+                  <p className="mt-2 text-[14px] text-fg-secondary">Use the work address your administrator invited.</p>
+                </div>
 
-            <Field label="Work email" htmlFor="email" hint="We'll match it to your company account.">
-              <TextInput
-                id="email"
-                type="email"
-                autoComplete="username"
-                required
-                value={email}
-                placeholder="you@company.com"
-                onChange={(event) => { setEmail(event.target.value); }}
-              />
-            </Field>
+                <Field label="Work email" htmlFor="email" hint="We'll match it to your company account.">
+                  <TextInput
+                    id="email"
+                    type="email"
+                    autoComplete="username"
+                    required
+                    value={email}
+                    placeholder="you@company.com"
+                    onChange={(event) => { setEmail(event.target.value); }}
+                  />
+                </Field>
 
-            <Field label="Password" htmlFor="password">
-              <PasswordInput id="password" value={password} onChange={setPassword} />
-            </Field>
+                <Field label="Password" htmlFor="password">
+                  <PasswordInput id="password" value={password} onChange={setPassword} />
+                </Field>
+              </>
+            ) : (
+              <>
+                <div>
+                  <h1 className="text-[28px] font-semibold leading-[34px] tracking-[-0.01em]">Choose a password</h1>
+                  <p className="mt-2 text-[14px] text-fg-secondary">
+                    The password from your invitation was temporary. Set your own to finish signing in.
+                  </p>
+                </div>
 
-            {signIn.error !== null ? <ErrorNotice error={signIn.error} /> : null}
+                <Field label="New password" htmlFor="new-password" hint="At least 12 characters.">
+                  <PasswordInput id="new-password" value={newPassword} onChange={setNewPassword} autoComplete="new-password" />
+                </Field>
 
-            <Button type="submit" size="lg" loading={signIn.isPending} className="w-full">
-              Continue
+                <Field label="Confirm password" htmlFor="confirm-password">
+                  <PasswordInput id="confirm-password" value={confirmPassword} onChange={setConfirmPassword} autoComplete="new-password" />
+                </Field>
+
+                {mismatch ? (
+                  <p role="alert" className="rounded-md bg-danger-subtle px-3 py-2 text-[13px] text-fg-danger">
+                    The two passwords do not match.
+                  </p>
+                ) : null}
+              </>
+            )}
+
+            {active.error !== null ? <ErrorNotice error={active.error} /> : null}
+
+            <Button type="submit" size="lg" loading={active.isPending} disabled={blocked} className="w-full">
+              {step === 'credentials' ? 'Continue' : 'Set password and continue'}
             </Button>
 
-            <p className="text-center text-[12px] text-fg-tertiary">Can't sign in? Contact your travel admin.</p>
+            {step === 'credentials' ? (
+              <p className="text-center text-[12px] text-fg-tertiary">Can't sign in? Contact your travel admin.</p>
+            ) : null}
           </form>
         )}
       </div>
@@ -155,10 +218,12 @@ function PasswordInput({
   id,
   value,
   onChange,
+  autoComplete = 'current-password',
 }: {
   readonly id: string
   readonly value: string
   readonly onChange: (value: string) => void
+  readonly autoComplete?: 'current-password' | 'new-password'
 }) {
   const [revealed, setRevealed] = useState(false)
 
@@ -167,7 +232,7 @@ function PasswordInput({
       <TextInput
         id={id}
         type={revealed ? 'text' : 'password'}
-        autoComplete="current-password"
+        autoComplete={autoComplete}
         required
         value={value}
         onChange={(event) => { onChange(event.target.value); }}
