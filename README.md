@@ -57,6 +57,16 @@ Concurrent refreshes collapse into one request. Ten queries failing with 401 at 
 is the normal case after expiry, and ten refreshes rotate the token family ten times — which the
 identity service correctly reads as reuse and answers by revoking the family (§11.1).
 
+## Every administrator leaves onboarding with a password
+
+The sign-in page takes a work email and a password, and nothing else. The onboarding link,
+by contrast, signs its holder in with a six-digit code — which makes an account with no
+password at all, and an address that already rides with Orbit on a phone code has none
+either. Identity reports `hasPassword` on every code sign-in; when it is false, the entry
+page asks for a password (identity's twelve-character floor) and saves it through
+`POST /v1/account/credentials` before it claims the company. Before this step, an
+administrator could finish setup, sign out, and never get back in.
+
 ## Retry policy
 
 Queries retry twice, and **only** on 429 or 5xx. TanStack's default retries everything three
@@ -112,8 +122,9 @@ docker compose up -d --build
 
 ## Tests
 
-23. The ones worth reading assert that a loading button cannot be clicked twice, that concurrent
-refreshes collapse into one request, and that a 409 is not retried.
+35. The ones worth reading assert that a loading button cannot be clicked twice, that concurrent
+refreshes collapse into one request, that a 409 is not retried, and that the onboarding link
+will not hand over to the wizard until an account with no password has chosen one.
 
 ---
 
