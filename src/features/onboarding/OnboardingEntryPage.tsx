@@ -225,7 +225,14 @@ export function OnboardingEntryPage({ selfServe = false }: { readonly selfServe?
                 ? 'If your company is already on Orbit, sign in to carry on where it left off. If somebody sent you an invitation, open the link in that email instead.'
                 : 'Links are personal and stop working when a new one is sent. Ask your onboarding manager for a fresh one, or sign in if your company is already set up.'}
             </p>
-            <Button variant="secondary" onClick={() => { void navigate({ to: '/sign-in' }) }}>Go to sign in</Button>
+            <div className="flex flex-wrap gap-3">
+              {selfServe && (
+                // Still signed in: the company can be founded again without repeating the
+                // code. Founding is idempotent, so a retry after a half-success is safe.
+                <Button onClick={() => { setProblem(null); setStep('claiming'); claim.mutate() }}>Try again</Button>
+              )}
+              <Button variant="secondary" onClick={() => { void navigate({ to: '/sign-in' }) }}>Go to sign in</Button>
+            </div>
           </div>
         )}
 
