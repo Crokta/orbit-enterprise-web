@@ -6,7 +6,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { OnboardingEntryPage } from './OnboardingEntryPage'
 
 const navigate = vi.fn()
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }))
+vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => navigate,
+  Link: ({ to, children }: { readonly to: string; readonly children: React.ReactNode }) => <a href={to}>{children}</a>,
+}))
 
 const post = vi.fn()
 vi.mock('../../lib/api/client', () => ({
@@ -15,7 +18,13 @@ vi.mock('../../lib/api/client', () => ({
 }))
 
 const claim = vi.fn()
-vi.mock('./api', () => ({ onboarding: { claim: (...args: unknown[]) => claim(...args) as unknown } }))
+const selfServe = vi.fn()
+vi.mock('./api', () => ({
+  onboarding: {
+    claim: (...args: unknown[]) => claim(...args) as unknown,
+    selfServe: (...args: unknown[]) => selfServe(...args) as unknown,
+  },
+}))
 
 vi.mock('../../lib/auth/session', () => ({
   deviceFingerprint: () => 'fp',
@@ -26,13 +35,13 @@ vi.mock('../../lib/auth/session', () => ({
 
 const pair = { accessToken: 'a', refreshToken: 'r', familyId: 'f', expiresInSeconds: 900 }
 
-function renderPage() {
-  window.history.replaceState({}, '', '/onboarding/link-token')
+function renderPage(props: { readonly selfServe?: boolean } = {}) {
+  window.history.replaceState({}, '', props.selfServe === true ? '/get-started' : '/onboarding/link-token')
   const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
 
   return render(
     <QueryClientProvider client={client}>
-      <OnboardingEntryPage />
+      <OnboardingEntryPage {...props} />
     </QueryClientProvider>,
   )
 }
@@ -53,6 +62,45 @@ describe('OnboardingEntryPage', () => {
     post.mockReset()
     claim.mockReset()
     claim.mockResolvedValue({})
+    selfServe.mockReset()
+    selfServe.mockResolvedValue({})
+  })
+
+  it('self-serve: names the company, signs in, chooses a password, and founds the company instead of claiming one', async () => {
+    const user = userEvent.setup()
+    post
+      .mockResolvedValueOnce({ challengeId: 'c1', expiresAt: '2026-09-06T00:00:00Z' }) // signup
+      .mockResolvedValueOnce({ ...pair, hasPassword: false }) // verify
+      .mockResolvedValueOnce({}) // credentials
+
+    renderPage({ selfServe: true })
+
+    await user.type(await screen.findByLabelText('Company name'), 'Lekki Logistics')
+    await signUpAndVerify(user)
+
+    await screen.findByRole('heading', { name: 'Choose a password' })
+    await user.type(screen.getByLabelText('New password'), 'correct-horse-battery')
+    await user.type(screen.getByLabelText('Confirm password'), 'correct-horse-battery')
+    await user.click(screen.getByRole('button', { name: 'Save password and continue' }))
+
+    await waitFor(() => {
+      expect(selfServe).toHaveBeenCalledWith({ companyName: 'Lekki Logistics', setupName: 'Ada Obi', setupPhone: '+2348095532210' })
+    })
+    expect(claim).not.toHaveBeenCalled()
+    expect(navigate).toHaveBeenCalledWith({ to: '/setup', replace: true })
+  })
+
+  it('self-serve: will not send a code until the company has a name', async () => {
+    const user = userEvent.setup()
+    renderPage({ selfServe: true })
+
+    await user.type(await screen.findByLabelText('Full name'), 'Ada Obi')
+    await user.type(screen.getByLabelText('Work email'), 'ada@northwind.example')
+    await user.type(screen.getByLabelText('Mobile number'), '+2348095532210')
+    expect(screen.getByRole('button', { name: 'Send me a code' })).toBeDisabled()
+
+    await user.type(screen.getByLabelText('Company name'), 'Lekki Logistics')
+    expect(screen.getByRole('button', { name: 'Send me a code' })).toBeEnabled()
   })
 
   it('asks for a password when the code sign-in says the account has none, then claims', async () => {

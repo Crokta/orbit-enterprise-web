@@ -57,6 +57,23 @@ Concurrent refreshes collapse into one request. Ten queries failing with 401 at 
 is the normal case after expiry, and ten refreshes rotate the token family ten times — which the
 identity service correctly reads as reuse and answers by revoking the family (§11.1).
 
+## Two front doors into onboarding
+
+A company arrives one of two ways, and both land in the same wizard at the same first step:
+
+- **Invited.** The backoffice creates the company and sends an onboarding link. Identity
+  provisions the administrator with a temporary password (or leaves an existing account
+  alone), and `/onboarding/$token` signs them in and claims the seat.
+- **Self-serve.** `/get-started` (linked from the sign-in page) asks for a company name, the
+  person's name, a work email and a phone. It signs them in the same way, then calls
+  `POST /v1/enterprise/onboarding/self-serve`, which founds the company with them as its
+  owner — no link to claim, no account manager yet, an "Signed up online" entry on the
+  timeline for the backoffice to notice. The registered name, RC number and everything else
+  are collected by the wizard. Idempotent: an owner who already has a company in setup gets
+  that one back; an address with an invitation waiting is told to open the link instead.
+
+Both doors are one page, `OnboardingEntryPage`, with a `selfServe` prop.
+
 ## Every administrator leaves onboarding with a password
 
 The sign-in page takes a work email and a password, and nothing else. The onboarding link,
@@ -122,9 +139,10 @@ docker compose up -d --build
 
 ## Tests
 
-35. The ones worth reading assert that a loading button cannot be clicked twice, that concurrent
+37. The ones worth reading assert that a loading button cannot be clicked twice, that concurrent
 refreshes collapse into one request, that a 409 is not retried, and that the onboarding link
-will not hand over to the wizard until an account with no password has chosen one.
+will not hand over to the wizard until an account with no password has chosen one, and that
+the self-serve door founds a company instead of claiming one.
 
 ---
 

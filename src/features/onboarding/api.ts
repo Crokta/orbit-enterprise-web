@@ -129,6 +129,9 @@ const BASE = '/v1/enterprise/onboarding'
 
 export const onboarding = {
   claim: (token: string) => api.post<OnboardingState>(`${BASE}/claim`, { json: { token }, idempotencyKey: newIdempotencyKey() }),
+  /** The other way in: no link, no invitation — the signed-in person founds the company. */
+  selfServe: (body: { readonly companyName: string; readonly setupName: string; readonly setupPhone: string | null }) =>
+    api.post<OnboardingState>(`${BASE}/self-serve`, { json: body, idempotencyKey: newIdempotencyKey() }),
   state: () => api.get<OnboardingState>(`${BASE}/me`),
 
   saveCompany: (body: {

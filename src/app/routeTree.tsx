@@ -53,6 +53,16 @@ const onboardingEntryRoute = createRoute({
 })
 
 /**
+ * The other front door: a company that signs itself up, with no invitation from the
+ * backoffice. Same page, same sign-in; it founds a company instead of claiming one.
+ */
+const getStartedRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/get-started',
+  component: () => <OnboardingEntryPage selfServe />,
+})
+
+/**
  * Everything behind authentication.
  *
  * The guard tries a refresh before redirecting. A user returning to an open tab after
@@ -113,6 +123,7 @@ const settingsIndexRoute = createRoute({
 export const routeTree = rootRoute.addChildren([
   signInRoute,
   onboardingEntryRoute,
+  getStartedRoute,
   authenticatedRoute.addChildren([
     // The index sends members to booking and admins to the dashboard.
     page('/', HomeRedirect),

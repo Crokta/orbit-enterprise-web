@@ -1,5 +1,5 @@
 import { useMutation } from '@tanstack/react-query'
-import { useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { type SyntheticEvent, useEffect, useState } from 'react'
 
 import { Button } from '../../components/ui/Button'
@@ -44,13 +44,26 @@ const MinPasswordLength = 12
  * setup, signed out, and could never get back in. Identity says on the code sign-in
  * whether a password exists; when it does not, one is chosen here, before the claim.
  */
-export function OnboardingEntryPage() {
+/**
+ * Two front doors, one page.
+ *
+ * With `selfServe`, there is no link and no invitation: the person founds the company
+ * themselves — a name for it, a name for them, a work email, a phone — and lands in the
+ * same wizard at the same first step a backoffice-invited company starts from. The
+ * sign-in half (code, then a password if the account has none) is identical; only the
+ * last call differs: create a company rather than claim one.
+ */
+export function OnboardingEntryPage({ selfServe = false }: { readonly selfServe?: boolean }) {
   // The token is the last path segment. Read from the location rather than the router's
   // typed params: it is an opaque string the page hands straight back to the server.
-  const token = decodeURIComponent(window.location.pathname.split('/').filter((part) => part.length > 0).pop() ?? '')
+  const token = selfServe ? '' : decodeURIComponent(window.location.pathname.split('/').filter((part) => part.length > 0).pop() ?? '')
   const navigate = useNavigate()
 
   const [step, setStep] = useState<Step>('checking')
+  // Self-serve with a session already open: only the company is missing, so the
+  // details form asks for that and nothing about signing in.
+  const [signedIn, setSignedIn] = useState(false)
+  const [companyName, setCompanyName] = useState('')
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [phone, setPhone] = useState('')
@@ -62,23 +75,32 @@ export function OnboardingEntryPage() {
   const [problem, setProblem] = useState<string | null>(null)
 
   const claim = useMutation({
-    mutationFn: () => onboarding.claim(token),
+    mutationFn: () =>
+      selfServe
+        ? onboarding.selfServe({ companyName: companyName.trim(), setupName: name.trim(), setupPhone: phone.trim().length > 0 ? phone.trim() : null })
+        : onboarding.claim(token),
     onSuccess: () => { void navigate({ to: '/setup', replace: true }) },
     onError: (failure) => {
-      setProblem(failure instanceof ApiError ? failure.message : 'The link could not be opened.')
+      setProblem(failure instanceof ApiError ? failure.message : selfServe ? 'Your company could not be set up.' : 'The link could not be opened.')
       setStep('failed')
     },
   })
 
-  // Already signed in — perhaps they clicked the link twice. Straight to the claim.
+  // Already signed in — perhaps they clicked the link twice. Straight to the claim. On
+  // the self-serve door there is still a company to name first.
   useEffect(() => {
     const lifetime = { cancelled: false }
 
     void (async () => {
       if (isSessionValid() || (await refreshAccessToken())) {
         if (!lifetime.cancelled) {
-          setStep('claiming')
-          claim.mutate()
+          if (selfServe) {
+            setSignedIn(true)
+            setStep('details')
+          } else {
+            setStep('claiming')
+            claim.mutate()
+          }
         }
       } else if (!lifetime.cancelled) {
         setStep('details')
@@ -151,6 +173,13 @@ export function OnboardingEntryPage() {
 
   function onStart(event: SyntheticEvent) {
     event.preventDefault()
+
+    if (signedIn) {
+      setStep('claiming')
+      claim.mutate()
+      return
+    }
+
     start.mutate()
   }
 
@@ -168,7 +197,10 @@ export function OnboardingEntryPage() {
   const tooShort = newPassword.length > 0 && newPassword.length < MinPasswordLength
   const canSetPassword = newPassword.length >= MinPasswordLength && newPassword === confirmPassword
 
-  const canStart = name.trim().length > 1 && email.includes('@') && phone.trim().length >= 10
+  const canStart =
+    name.trim().length > 1 &&
+    (!selfServe || companyName.trim().length > 1) &&
+    (signedIn || (email.includes('@') && phone.trim().length >= 10))
 
   return (
     <main className="grid min-h-screen place-items-center bg-canvas px-4 py-10">
@@ -177,19 +209,21 @@ export function OnboardingEntryPage() {
           <span className="grid size-9 place-items-center rounded-lg bg-brand text-[16px] font-semibold text-fg-on-brand">O</span>
           <div>
             <p className="text-[16px] font-semibold leading-5">Orbit Business</p>
-            <p className="text-[12px] text-fg-tertiary">Account setup</p>
+            <p className="text-[12px] text-fg-tertiary">{selfServe ? 'Get started' : 'Account setup'}</p>
           </div>
         </div>
 
         {step === 'checking' && <p className="text-[14px] text-fg-secondary">Opening your link…</p>}
 
-        {step === 'claiming' && <p className="text-[14px] text-fg-secondary">Setting up your account…</p>}
+        {step === 'claiming' && <p className="text-[14px] text-fg-secondary">{selfServe ? 'Creating your company…' : 'Setting up your account…'}</p>}
 
         {step === 'failed' && (
           <div className="space-y-4">
-            <Banner tone="danger" title="This link did not work">{problem}</Banner>
+            <Banner tone="danger" title={selfServe ? 'Your company could not be set up' : 'This link did not work'}>{problem}</Banner>
             <p className="text-[13px] text-fg-secondary">
-              Links are personal and stop working when a new one is sent. Ask your onboarding manager for a fresh one, or sign in if your company is already set up.
+              {selfServe
+                ? 'If your company is already on Orbit, sign in to carry on where it left off. If somebody sent you an invitation, open the link in that email instead.'
+                : 'Links are personal and stop working when a new one is sent. Ask your onboarding manager for a fresh one, or sign in if your company is already set up.'}
             </p>
             <Button variant="secondary" onClick={() => { void navigate({ to: '/sign-in' }) }}>Go to sign in</Button>
           </div>
@@ -198,29 +232,48 @@ export function OnboardingEntryPage() {
         {step === 'details' && (
           <form onSubmit={onStart} className="space-y-5">
             <div>
-              <h1 className="text-[22px] font-semibold leading-7">Create your sign-in</h1>
+              <h1 className="text-[22px] font-semibold leading-7">{selfServe ? 'Set up your company' : 'Create your sign-in'}</h1>
               <p className="mt-1 text-[14px] text-fg-secondary">
-                Use the work email this link was sent to. We will send a six-digit code to confirm it, then you will choose the password you sign in with from now on.
+                {signedIn
+                  ? 'Name the company and you are into setup. Everything else — registration, billing, people, policy — comes step by step.'
+                  : selfServe
+                    ? 'A name for the company and a work email to sign in with. We will send a six-digit code to confirm the address, then you will choose a password, and setup starts straight away.'
+                    : 'Use the work email this link was sent to. We will send a six-digit code to confirm it, then you will choose the password you sign in with from now on.'}
               </p>
             </div>
 
+            {selfServe && (
+              <Field label="Company name" htmlFor="ob-company" hint="As people know it. The registered name and RC number come in the first setup step.">
+                <TextInput id="ob-company" value={companyName} onChange={(e) => { setCompanyName(e.target.value) }} autoComplete="organization" autoFocus />
+              </Field>
+            )}
             <Field label="Full name" htmlFor="ob-name">
-              <TextInput id="ob-name" value={name} onChange={(e) => { setName(e.target.value) }} autoComplete="name" autoFocus />
+              <TextInput id="ob-name" value={name} onChange={(e) => { setName(e.target.value) }} autoComplete="name" autoFocus={!selfServe} />
             </Field>
-            <Field label="Work email" htmlFor="ob-email" hint="The address the onboarding email arrived at.">
-              <TextInput id="ob-email" type="email" value={email} onChange={(e) => { setEmail(e.target.value) }} autoComplete="email" />
-            </Field>
-            <Field label="Mobile number" htmlFor="ob-phone" hint="For ride updates when you travel yourself.">
-              <TextInput id="ob-phone" type="tel" value={phone} onChange={(e) => { setPhone(e.target.value) }} placeholder="+234 809 553 2210" autoComplete="tel" />
-            </Field>
+            {!signedIn && (
+              <>
+                <Field label="Work email" htmlFor="ob-email" hint={selfServe ? 'Its domain becomes the company\'s: colleagues with the same one can be invited.' : 'The address the onboarding email arrived at.'}>
+                  <TextInput id="ob-email" type="email" value={email} onChange={(e) => { setEmail(e.target.value) }} autoComplete="email" />
+                </Field>
+                <Field label="Mobile number" htmlFor="ob-phone" hint="For ride updates when you travel yourself.">
+                  <TextInput id="ob-phone" type="tel" value={phone} onChange={(e) => { setPhone(e.target.value) }} placeholder="+234 809 553 2210" autoComplete="tel" />
+                </Field>
+              </>
+            )}
 
             {start.isError && (
               <Banner tone="danger">{start.error instanceof ApiError ? start.error.message : 'Something went wrong. Try again.'}</Banner>
             )}
 
-            <Button type="submit" size="lg" className="w-full" loading={start.isPending} disabled={!canStart}>
-              Send me a code
+            <Button type="submit" size="lg" className="w-full" loading={start.isPending || claim.isPending} disabled={!canStart}>
+              {signedIn ? 'Create company' : 'Send me a code'}
             </Button>
+
+            {selfServe && !signedIn && (
+              <p className="text-center text-[13px] text-fg-tertiary">
+                Already set up? <Link to="/sign-in" className="text-fg hover:underline">Sign in</Link>
+              </p>
+            )}
           </form>
         )}
 

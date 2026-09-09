@@ -1,5 +1,5 @@
 import { useMutation } from '@tanstack/react-query'
-import { useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { type SyntheticEvent, useState } from 'react'
 
 import { Button } from '../../components/ui/Button'
@@ -173,6 +173,12 @@ export function SignInPage() {
 
             {step === 'credentials' ? (
               <p className="text-center text-[12px] text-fg-tertiary">Can't sign in? Contact your travel admin.</p>
+            ) : null}
+
+            {step === 'credentials' ? (
+              <p className="text-center text-[13px] text-fg-secondary">
+                New to Orbit Business? <Link to="/get-started" className="font-medium text-fg hover:underline">Set up your company</Link>
+              </p>
             ) : null}
           </form>
         )}
