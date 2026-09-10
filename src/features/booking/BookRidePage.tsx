@@ -1,4 +1,4 @@
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { type SyntheticEvent, useState } from 'react'
 
@@ -11,6 +11,7 @@ import { PageHeader } from '../../components/ui/PageHeader'
 import { enterprise, vehicleLabel } from '../../lib/api/enterprise'
 import { ApiError } from '../../lib/api/problem'
 import { formatCount, formatMoney, monthToDateLabel } from '../../lib/format'
+import { queryKeys } from '../../lib/query/client'
 import { type Place, toE7 } from '../../lib/geocode'
 import { useMe } from '../session/useMe'
 import { PlaceSearch } from './PlaceSearch'
@@ -41,6 +42,11 @@ export function BookRidePage() {
 
   const policy = me.data?.policy ?? null
   const effectiveCostCentre = costCentre || me.data?.costCentreCode || null
+
+  // The company's active cost centres, for anyone who books. The admin list carries
+  // budgets and is closed to members, which is why the form has its own call.
+  const costCentres = useQuery({ queryKey: queryKeys.costCentres.mine, queryFn: enterprise.costCentres.mine })
+  const otherCentres = (costCentres.data ?? []).filter((centre) => centre.code !== me.data?.costCentreCode)
 
   const quote = useMutation({
     mutationFn: () => {
@@ -118,6 +124,11 @@ export function BookRidePage() {
               <Field label="Cost centre" htmlFor="cc">
                 <Select id="cc" value={costCentre} onChange={(event) => { setCostCentre(event.target.value); }}>
                   <option value="">{me.data?.costCentreCode === null || me.data === undefined ? 'None' : `${me.data.costCentreName ?? me.data.costCentreCode} · ${me.data.costCentreCode} (yours)`}</option>
+                  {costCentres.isPending && <option disabled value="__loading">Loading cost centres…</option>}
+                  {costCentres.isError && <option disabled value="__error">Could not load the cost centres — your own still applies</option>}
+                  {otherCentres.map((centre) => (
+                    <option key={centre.code} value={centre.code}>{`${centre.name} · ${centre.code}`}</option>
+                  ))}
                 </Select>
               </Field>
               <Field label="Project code" htmlFor="project">

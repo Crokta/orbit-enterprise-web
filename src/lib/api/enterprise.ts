@@ -106,6 +106,13 @@ export interface Employee {
   readonly activatedAt: string | null
 }
 
+/** A cost centre as the booking form offers it: no budget, no spend, just what to bill to. */
+export interface CostCentreOption {
+  readonly code: string
+  readonly name: string
+  readonly isMine: boolean
+}
+
 export interface CostCentre {
   readonly code: string
   readonly name: string
@@ -319,6 +326,8 @@ export const enterprise = {
   },
 
   costCentres: {
+    /** Every active centre on the caller's company; readable by any employee, unlike `list`. */
+    mine: () => api.get<readonly CostCentreOption[]>(`${BASE}/my/cost-centres`),
     list: (params: ListParams & { readonly active?: boolean | undefined } = {}) =>
       api.get<Page<CostCentre>>(`${BASE}/cost-centres`, { query: { ...params } }),
     exportPath: `${BASE}/cost-centres/export.csv`,

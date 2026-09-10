@@ -75,7 +75,7 @@ export const queryKeys = {
     detail: (employeeId: string) => ['employees', 'detail', employeeId] as const,
   },
   policies: { all: ['policies'] as const },
-  costCentres: { all: ['cost-centres'] as const },
+  costCentres: { all: ['cost-centres'] as const, mine: ['cost-centres', 'mine'] as const },
   invoices: {
     all: ['invoices'] as const,
     list: (filters: Record<string, unknown>) => ['invoices', 'list', filters] as const,
