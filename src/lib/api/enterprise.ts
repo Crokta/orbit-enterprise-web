@@ -375,6 +375,8 @@ export const enterprise = {
       readonly dropoffLatE7: number
       readonly dropoffLonE7: number
       readonly costCentre: string | null
+      /** The chosen departure, ISO 8601. Travel hours are judged at this moment, on the company's clock. */
+      readonly scheduledFor?: string | undefined
     }) => api.post<readonly QuoteOption[]>(`${BASE}/quotes`, { json: body }),
     book: (
       body: {
@@ -390,6 +392,7 @@ export const enterprise = {
         readonly pickupLabel: string
         readonly dropoffLabel: string
         readonly costCentre: string | null
+        readonly scheduledFor?: string | undefined
       },
       idempotencyKey: string,
     ) => api.post<BookingResult>(`${BASE}/rides`, { json: body, idempotencyKey }),

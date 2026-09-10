@@ -27,7 +27,7 @@ interface TokenPair {
 type Step = 'checking' | 'details' | 'code' | 'password' | 'claiming' | 'failed'
 
 /** Identity's own floor. Saying so here beats a round trip that comes back with the rule. */
-const MinPasswordLength = 12
+const MinPasswordLength = 8
 
 /**
  * The onboarding link.

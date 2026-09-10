@@ -17,7 +17,7 @@ import { formatMoney } from '../../lib/format'
 import { toE7 } from '../../lib/geocode'
 import { queryKeys } from '../../lib/query/client'
 import { useMe } from '../session/useMe'
-import { clearDraft, loadDraft } from './draft'
+import { clearDraft, loadDraft, scheduledFor } from './draft'
 
 /**
  * Choose a ride: every priced option with the policy's verdict on it.
@@ -65,6 +65,7 @@ export function ChooseRidePage() {
           pickupLabel: draft.pickup.name,
           dropoffLabel: draft.dropoff.name,
           costCentre: draft.costCentre,
+          scheduledFor: scheduledFor(draft.date, draft.time),
         },
         idempotencyKey,
       )

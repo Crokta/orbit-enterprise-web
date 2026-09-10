@@ -15,7 +15,7 @@ import { queryKeys } from '../../lib/query/client'
 import { type Place, toE7 } from '../../lib/geocode'
 import { useMe } from '../session/useMe'
 import { PlaceSearch } from './PlaceSearch'
-import { type BookingDraft, loadDraft, saveDraft } from './draft'
+import { type BookingDraft, loadDraft, saveDraft, scheduledFor } from './draft'
 
 /**
  * Book a ride.
@@ -60,6 +60,7 @@ export function BookRidePage() {
         dropoffLatE7: toE7(dropoff.latitude),
         dropoffLonE7: toE7(dropoff.longitude),
         costCentre: effectiveCostCentre,
+        scheduledFor: scheduledFor(date, time),
       })
     },
     onSuccess: (options) => {

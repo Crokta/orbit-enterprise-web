@@ -47,3 +47,13 @@ export function clearDraft(): void {
     // Nothing to clear.
   }
 }
+
+/**
+ * The chosen departure as an instant. The form holds a date and a time in the user's own
+ * zone; the server judges travel hours on the company's clock, so it gets the moment, not
+ * the digits.
+ */
+export function scheduledFor(date: string, time: string): string | undefined {
+  const at = new Date(`${date}T${time}`)
+  return Number.isNaN(at.getTime()) ? undefined : at.toISOString()
+}

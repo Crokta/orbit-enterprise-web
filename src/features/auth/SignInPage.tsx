@@ -94,10 +94,10 @@ export function SignInPage() {
 
   const active = step === 'credentials' ? signIn : changePassword
 
-  // Identity's own floor is twelve characters; saying so here beats a round trip that
+  // Identity's own floor is eight characters; saying so here beats a round trip that
   // comes back with a rule the person could have been told before they typed.
   const mismatch = newPassword.length > 0 && confirmPassword.length > 0 && newPassword !== confirmPassword
-  const tooShort = newPassword.length > 0 && newPassword.length < 12
+  const tooShort = newPassword.length > 0 && newPassword.length < 8
 
   const blocked =
     step === 'change' && (mismatch || tooShort || newPassword.length === 0 || confirmPassword.length === 0)
@@ -149,7 +149,7 @@ export function SignInPage() {
                   </p>
                 </div>
 
-                <Field label="New password" htmlFor="new-password" hint="At least 12 characters.">
+                <Field label="New password" htmlFor="new-password" hint="At least 8 characters.">
                   <PasswordInput id="new-password" value={newPassword} onChange={setNewPassword} autoComplete="new-password" />
                 </Field>
 
